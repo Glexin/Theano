@@ -38,6 +38,531 @@ from theano.tensor.basic import get_scalar_constant_value
 _logger = logging.getLogger('theano.scan_utils')
 
 
+def flatten_gen(list2d):
+    for l in list2d:
+        for e in l:
+            yield e
+
+
+def flatten(list2d):
+    return [e for e in flatten_gen(list2d)]
+
+
+class SVMClosedError(Exception):
+    pass
+
+class VarTagError(Exception):
+    pass
+
+class ScanVarMap(object):
+    # TODO doc
+    # TODO convensions 'dynamic/static shared' 'unextendable'
+    #           'hidden'
+    # point to SI index
+    '''
+    In order of n_step, mitmots, mitsots, sitsots, nitnots, shareds,
+    nonseqs.
+    Warnning : Not Support Vector Machine.
+    '''
+    # Var tags.
+    N_STEP_TAG = "N_STEP_TAG"
+    SEQ_TAG = "SEQ_TAG"
+    SCFN_TAG = "SCFN_TAG"  # Explicit in scan function.
+    HIDDEN_TAG = "HIDDEN_TAG"
+    OUTPUT_TAG = "OUTPUT_TAG"
+    MITMOT_TAG = "MITMOT_TAG"
+    MITSOT_TAG = "MITSOT_TAG"
+    SITSOT_TAG = "SITSOT_TAG"
+    NITSOT_TAG = "NITSOT_TAG"
+    NONSEQ_TAG = "NONSEQ_TAG"
+    CONST_TAG = "CONST_TAG"
+    NS_INPUT_TAG = "NONSEQ_INPUT_TAG"
+    SHARED_TAG = "SHARED_TAG"
+    STATIC_TAG = "STATIC_TAG"  # Only for shared.
+    DYNAMIC_TAG = "DYNAMIC_TAG"  # Only for shared.
+    UNEXT_TAG = "UNEXTENDABLE_TAG"  # Only for dynamic shared.
+    CONDITION_TAG = "CONDITION_TAG"
+    CELL_TAGS = (N_STEP_TAG, SEQ_TAG, SCFN_TAG, HIDDEN_TAG, OUTPUT_TAG,
+            MITMOT_TAG, MITSOT_TAG, SITSOT_TAG, NITSOT_TAG, NONSEQ_TAG,
+            CONST_TAG, NS_INPUT_TAG, SHARED_TAG, STATIC_TAG, DYNAMIC_TAG,
+            UNEXT_TAG, CONDITION_TAG)
+
+    # A 'combo tag' is a predefined tag combination to use, tuple type.
+    # A var tag must be one of valid combo tags(predefined in
+    # VALID_VAR_TAGS).
+
+    # A tag enum is a set of tags, a var tag can at most has one of
+    # these tags.
+    EH_TAG_ENUM = (SCFN_TAG, HIDDEN_TAG) # explict/hidden
+    OUTPUT_TAG_ENUM = (SITSOT_TAG, MITMOT_TAG, MITSOT_TAG, NITSOT_TAG)
+    SD_TAG_ENUM = (STATIC_TAG, DYNAMIC_TAG)
+    EXT_TAG_ENUM = (UNEXT_TAG, SITSOT_TAG)
+    NONSEQ_TAG_ENUM = (NS_INPUT_TAG, SHARED_TAG, CONDITION_TAG)
+    tag_enums = (EH_TAG_ENUM, OUTPUT_TAG_ENUM, SD_TAG_ENUM, EXT_TAG_ENUM,
+            NONSEQ_TAG_ENUM)
+    # output
+    #   mitmot
+    #   mitsot
+    #   sitsot
+    #   nitsot
+    # nonseq
+    #   constant
+    #   nonseq inputs
+    #   shared
+    #       dynamic
+    #           sitsot
+    #           unexpendable
+    #       static
+    dependencies = {OUTPUT_TAG: OUTPUT_TAG_ENUM,
+                    OUTPUT_TAG: (SCFN_TAG,),
+                    SEQ_TAG: (SCFN_TAG,),
+                    OUTPUT_TAG: EH_TAG_ENUM,
+                    NONSEQ_TAG: EH_TAG_ENUM,
+                    SHARED_TAG: SD_TAG_ENUM,
+                    DYNAMIC_TAG: EXT_TAG_ENUM,
+                    NONSEQ_TAG: NONSEQ_TAG_ENUM}
+
+    SCFN_OUTPUT_FILTER = (SCFN_TAG, OUTPUT_TAG)
+    SCFN_NONSEQ_FILTER = (NONSEQ_TAG, SCFN_TAG)
+
+    N_STEP_COMBO_TAG = (N_STEP_TAG,)
+    CONDITION_COMBO_TAG = (CONDITION_TAG,)
+    SEQ_COMBO_TAG = (SEQ_TAG,)
+    # TODO mitmot is for grad.
+    MITMOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, MITMOT_TAG,)
+    MITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, MITSOT_TAG,)
+    SITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, SITSOT_TAG,)
+    NITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, NITSOT_TAG,)
+    SHARED_COMBO_TAG = (SCFN_TAG, SCFN_NONSEQ_FILTER, SHARED_TAG, STATIC_TAG)
+    DYNAMIC_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            UNEXT_TAG)
+    SITSOT_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            SITSOT_TAG)
+    CONST_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, CONST_TAG)
+    NS_INPUT_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, NS_INPUT_TAG)
+    HIDDEN_NS_INPUT_COMBO_TAG = (HIDDEN_TAG, NONSEQ_TAG, NS_INPUT_TAG)
+
+    # TODO add hidden series.
+    VALID_VAR_TAGS = (N_STEP_COMBO_TAG, CONDITION_COMBO_TAG, SEQ_COMBO_TAG,
+            MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
+            NITSOT_COMBO_TAG, SHARED_COMBO_TAG, DYNAMIC_SHARED_COMBO_TAG,
+            SITSOT_SHARED_COMBO_TAG, CONDITION_COMBO_TAG, NS_INPUT_COMBO_TAG,
+            HIDDEN_NS_INPUT_COMBO_TAG)
+
+    # Var set types.
+    # ABST_TYPE = "ABST"
+    II_TYPE = "II"
+    IO_TYPE = "IO"
+    OI_TYPE = "OI"
+    OO_TYPE = "OO"
+    SCFNI_SEQ_TYPE = "SCFNI_SEQ"
+    SCFNI_OUTPUT_TYPE = "SCFNI_OUTPUT"
+    SCFNI_NONSEQ_TYPE = "SCFNI_NONSEQ"
+    SCFNO_TYPE = "SCFNO"
+    STFNI_TYPE = "STFNI"
+    SET_TYPES = (II_TYPE, IO_TYPE, OI_TYPE, OO_TYPE, SCFNI_SEQ_TYPE,
+                 SCFNI_OUTPUT_TYPE, SCFNI_NONSEQ_TYPE, SCFNO_TYPE, STFNI_TYPE)
+
+    # TODO add hidden combo into order
+    # TODO check all tag in order is in VALID_VAR_TAGS
+    II_ORDER = (SEQ_COMBO_TAG, MITMOT_COMBO_TAG, MITSOT_COMBO_TAG,
+            SITSOT_COMBO_TAG, SITSOT_SHARED_COMBO_TAG,
+            DYNAMIC_SHARED_COMBO_TAG, SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG)
+    IO_ORDER = (MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
+            SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
+            DYNAMIC_SHARED_COMBO_TAG, CONDITION_COMBO_TAG)
+    OI_ORDER = (N_STEP_COMBO_TAG, SEQ_COMBO_TAG, MITMOT_COMBO_TAG, MITSOT_COMBO_TAG,
+            SITSOT_COMBO_TAG, SITSOT_SHARED_COMBO_TAG,
+            DYNAMIC_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
+            SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG, HIDDEN_NS_INPUT_COMBO_TAG)
+    # TODO check sitsot_shared in oo
+    OO_ORDER = (MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
+                SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG)
+    SCFNI_SEQ_ORDER = (SEQ_COMBO_TAG,)
+    SCFNI_OUTPUT_ORDER = (SCFN_OUTPUT_FILTER,)
+    SCFNI_NONSEQ_ORDER = (SCFN_NONSEQ_FILTER,)
+    SCFNO_ORDER = (SCFN_OUTPUT_FILTER,)
+    STFNI_ORDER = (SEQ_COMBO_TAG, SCFN_OUTPUT_FILTER, SCFN_NONSEQ_FILTER)
+    # TODO rank STFNI output
+
+    @classmethod
+    def _get_var_set_order(cls, set_type):
+        assert set_type in cls.SET_TYPES
+        set_name = set_type + "_ORDER"
+        return getattr(cls, set_name)
+
+    @classmethod
+    def validate_var_ctag(cls, ctag):
+        if ctag not in cls.VALID_VAR_TAGS:
+            raise VarTagError("Combo tag is not a member of VALID_VAR_TAGS")
+
+    @classmethod
+    def tag_check(cls, ctag, includes=None, excludes=None):
+        '''
+        Check if 'tag' matches criterion.
+
+        Parameters
+        ----------
+        ctag : tuple
+            Combo tag to be checked.
+        includes : list/tuple
+            Tag set (should not contain combo tag, but itself can be a
+            combo tag) 'tag' parameter should include.
+        excludes : list/tuple
+            Tag set (should not contain combo tag, but itself can be a
+            combo tag) 'tag' parameter should exclude.
+
+        Returns
+        -------
+        bool
+            True if 'tag' matches criterion descripted by 'includes' and
+            'excludes', else False.
+        '''
+        assert isinstance(ctag, [list, tuple])
+        assert isinstance(includes, [list, tuple])
+        assert isinstance(excludes, [list, tuple])
+        if includes:
+            for _tag in includes:
+                if _tag not in ctag:
+                    return False
+        if excludes:
+            for _tag in excludes:
+                if _tag in ctag:
+                    return False
+        return True
+
+    @classmethod
+    def ctag_belong(cls, ctag, target_ctag):
+        '''
+        Check if 'ctag' is subtag of 'target_ctag', if 'ctag' has same
+        or more tag then 'target_ctag', we call 'ctag' is a subtag of
+        'target_ctag' and we say 'ctag' belong to 'target_ctag'.
+        '''
+        assert isinstance(ctag, [list, tuple])
+        assert isinstance(target_ctag, [list, tuple])
+        includes = target_ctag
+        return cls.tag_check(ctag, includes)
+
+    @classmethod
+    def mutex_var_ctags(cls, ctags):
+        '''
+        Make sure all ctags are mutually exclusive.
+        '''
+        for i, ctag1 in enumerate(ctags):
+            for j, ctag2 in enumerate(ctags):
+                if i != j:
+                    if cls.ctag_belong(ctag1, ctag2):
+                        raise Exception("Find a pair of combo tags "
+                                "not mutually exclusive.")
+
+    @classmethod
+    def find_ctag_belong(cls, ctag, target_ctags, exact=False):
+        '''
+        Find indexe of first ctag which is in 'target_ctags' and 'ctag' belongs to.
+
+        Parameters
+        ----------
+        ctag : tuple/list
+            Combo tag to be tested if belong to combo tags in 'target_ctags'.
+        target_ctags: : tuple/list
+            Tuple/list of ctags(which is tuple/list too) whose cell is tested
+            if 'ctag' belong to.
+        exact : bool
+            Only return index of combo tag in 'target_ctags' which is equal
+            to 'ctag'
+
+        Returns
+        -------
+        int
+            Index of first combo ctag in ``target_ctags`` who ``ctag`` belong to,
+            -1 if not found.
+        '''
+        assert isinstance(ctag, [list, tuple])
+        for target_ctag in target_ctags:
+            assert isinstance(target_ctag, [list, tuple])
+
+        for i, target_ctag in enumerate(target_ctags):  # exact
+            if ctag == target_ctag:
+                return i
+        if exact:
+            return -1
+        for i, target_ctag in enumerate(target_ctags):
+            if cls.ctag_belong(ctag, target_ctag):
+                return i
+        return -1
+
+    ##
+    # Code check
+    ##
+    @classmethod
+    def _validate_var_ctag(cls, var_ctag):
+        '''
+        For debug, check if a predefined var combo tag is valid.
+        '''
+        if not isinstance(var_ctag, tuple):
+            raise VarTagError("Var combo tag should be a tuple.")
+        for tag in var_ctag:
+            if tag not in cls.CELL_TAGS:
+                raise VarTagError("Element of var combo tag is invalid.")
+        # Check enum.
+        for tag_enum in cls.tag_enums:
+            count = 0
+            for tag in tag_enum:
+                if tag in var_ctag:
+                    count += 1
+            if count > 1:
+                raise VarTagError("Find conflict in var combo tag.")
+        # Check dependencies.
+        for tag, deps in cls.dependencies.items():
+            if tag in var_ctag:
+                for dep_tag in deps:
+                    if dep_tag not in var_ctag:
+                        raise VarTagError("Var combo tag lack of depedency.")
+        return True
+
+    @classmethod
+    def _validate_var_ctags(cls):
+        for ctag in cls.VALID_VAR_TAGS:
+            cls._validate_var_tag(ctag)
+
+    @classmethod
+    def _code_check(cls):
+        cls._validate_var_ctags()
+        cls.mutex_var_ctags(cls.VALID_VAR_TAGS)
+        for set_type in cls.SET_TYPES:
+            set_order = cls._get_var_set_order(set_type)
+            cls.mutex_var_ctags(set_order)
+
+    ## End code check
+
+    def __init__(self,
+                 mitmot_infos,
+                 mitsot_infos,
+                 n_sitsot_sis,
+                 n_nitsot_sis,
+                 shared_infos,
+                 nonseq_infos):
+        '''
+        Parameters
+        ----------
+        mitmot_info : List
+            List of tuple of (n_in, n_out) of each mitmot_si var.
+        mitsot_info : List
+            List of n_in of each mitsot_si var.
+        '''
+        self.ii_2_abst = []
+        self.io_2_abst = []
+        self.oi_2_abst = []
+        self.oo_2_abst = []
+        self.scfni_seq_2_abst = []
+        self.scfni_output_2_abst = []
+        self.scfni_nonseq_2_abst = []
+        self.scfno_2_abst = []
+        self.stfni_2_abst = []
+        self.abst_vars_meta = []
+        # TODO doc
+        self.listen_lists = {}
+        # n_step
+        self._add_var(0, 0, 1, 0, self.N_STEP_TYPE)
+        # mitmot
+        for n_in, n_out in mitmot_infos:
+            # TODO Check ois mitmot n_in.
+            self._add_var(n_in, n_out, n_in, n_out, self.MITMOT_TYPE)
+        # mitsot
+        for n_in in mitsot_infos:
+            self._add_var(n_in, 1, n_in, 1, self.MITSOT_TYPE)
+        # sitsot
+        for i in n_sitsot_sis:
+            self._add_var(1, 1, 1, 1, self.SITSOT_TYPE)
+        # nitsot
+        for i in n_nitsot_sis:
+            self._add_var(0, 1, 0, 1, self.SITSOT_TYPE)
+        # TODO shared
+        # TODO nonseq
+
+    def _add_var(self, abst_var_meta):
+        # TODO abst_var_meta doc
+        '''
+        WARNING : _add_var should be called following the right order
+        of vars of a var tag, but not need to follow the order of var
+        tags.
+
+        Parameters
+        ----------
+        abst_var_meta : dict
+            keys:
+                abst_idx
+                tag
+                n_in optional, for seqs, outputs
+                n_out optional, for outputs
+                scfn_rank optional, scfn outputs and scfn nonseqs
+                    scfn_rank can be scfn_nonseq_rank or
+                    scfn_output_rank, we don't seperate them by key.
+        '''
+        assert abst_var_meta["tag"] in self.VALID_VAR_TAGS
+        self.abst_vars_meta.append(abst_var_meta)
+        abst_var_meta["abst_idx"] = len(self.abst_vars_meta)
+        for set_type in self.SET_TYPES:
+            self._add_var_to_set(set_type, abst_var_meta)
+
+    def _add_var_to_set(self, set_type, abst_var_meta):
+        var_ctag = abst_var_meta["tag"]
+        abst_idxs = self._get_abst_idxs_by_set(set_type)
+        vars_meta = self.abst_vars_meta[abst_idxs]
+        vars_ctag = [meta["tag"] for meta in vars_meta]
+        # n
+        n = 0
+        if set_type == self.II_TYPE:
+            if var_ctag in [self.SITSOT_COMBO_TAG, self.SITSOT_SHARED_COMBO_TAG,
+                    self.DYNAMIC_SHARED_COMBO_TAG, self.STATIC_SHARED_COMBO_TAG,
+                    self.NS_INPUT_COMBO_TAG]:
+                n = 1
+            elif var_ctag in [self.SEQ_COMBO_TAG, self.MITMOT_COMBO_TAG,
+                    self.MITSOT_COMBO_TAG]:
+                n = abst_var_meta["n_in"]
+        elif set_type == self.IO_TYPE:
+            if var_ctag in [self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
+                    self.SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG,
+                    self.DYNAMIC_SHARED_COMBO_TAG, self.CONDITION_COMBO_TAG]:
+                n = 1
+            elif var_ctag in [self.MITMOT_COMBO_TAG]:
+                n = abst_var_meta["n_out"]
+        elif set_type == self.OI_TYPE:
+            if var_ctag in [self.N_STEP_COMBO_TAG, self.SITSOT_COMBO_TAG,
+                    self.SITSOT_SHARED_COMBO_TAG, self.DYNAMIC_SHARED_COMBO_TAG,
+                    self.NITSOT_COMBO_TAG, self.STATIC_SHARED_COMBO_TAG,
+                    self.SCFN_NONSEQ_FILTER]:
+                n = 1
+            elif var_ctag in [self.SEQ_COMBO_TAG, self.MITMOT_COMBO_TAG,
+                    self.MITSOT_COMBO_TAG]:
+                n = abst_var_meta["n_in"]
+        elif set_type == self.OO_TYPE:
+            if var_ctag in [self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
+                    self.SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG]:
+                n = 1
+            elif var_ctag in [self.MITMOT_COMBO_TAG]:
+                n = abst_var_meta["n_out"]
+        elif set_type == self.SCFNI_SEQ_TYPE:
+            if var_ctag in [self.SEQ_COMBO_TAG]:
+                n = 1
+        elif set_type == self.SCFNI_OUTPUT_TYPE:
+            if self.ctag_belong(var_ctag, self.SCFN_OUTPUT_FILTER):
+                n = 1
+        elif set_type == self.SCFNI_NONSEQ_TYPE:
+            if self.ctag_belong(var_ctag, self.SCFN_NONSEQ_FILTER):
+                n = 1
+        elif set_type == self.SCFNO_TYPE:
+            if self.ctag_belong(var_ctag, self.SCFN_OUTPUT_FILTER):
+                n = 1
+        elif set_type == self.STFNI_TYPE:
+            idxs = self.find_ctag_belong(var_ctag,
+                    [self.SEQ_COMBO_TAG, self.SCFN_OUTPUT_FILTER])
+            if len(idxs) != 0:
+                n = abst_var_meta["n_in"]
+            elif self.ctag_belong(var_ctag, self.SCFN_NONSEQ_FILTER):
+                n = 1
+        else:
+            raise AttributeError("Unrecogized set type : %s." % set_type)
+        # Find position to insert.
+        tag_order = self._get_var_set_order(set_type)
+        tag_pos = self.find_ctag_belong(var_ctag, tag_order)
+        tags_after = tag_order[tag_pos+1:]
+        pos = 0
+        for _var_tag in vars_ctag:
+            if _var_tag in tags_after:
+                break
+            else:
+                pos += 1
+        if set_type in [self.SCFNI_OUTPUT_TYPE, self.SCFNI_NONSEQ_TYPE,
+                self.SCFNO_ORDER, self.STFNI_ORDER]:
+            end = pos
+            scfn_rank = meta["scnf_rank"]
+            for i in reversed(range(end)):
+                _meta = vars_meta[i]
+                _scfn_rank = _meta["scfn_rank"]
+                if scfn_rank > _scfn_rank:
+                    break
+                elif scfn_rank < _scfn_rank:
+                    pos = i
+                else:
+                    raise AttributeError("scfn_rank conflict or var has"
+                            "been added.")
+        # Insert
+        for i in range(n):
+            abst_idxs.insert(pos, abst_var_meta["abst_idx"])
+        # Update registed lists.
+        lists = self.listen_lists.get(set_type, [])
+        for _list in lists:
+            for i in range(n):
+                _list.insert(pos, None)
+
+    def unregist_list(self, _list, set_type):
+        lists = self.listen_lists.get(set_type)
+        assert _list in lists
+        lists.remove(_list)
+        assert _list not in lists
+
+    def regist_list(self, _list, set_type):
+        assert len(list) == len(self._get_abst_idxs_by_set(set_type))
+        lists = self.listen_lists.get(set_type, [])
+        assert _list not in lists
+        lists.append(_list)
+        self.listen_lists[set_type] = lists
+
+    def _get_abst_idxs_by_set(self, set_type):
+        assert set_type in self.SET_TYPES
+        set_name = set_type.lower() + "_2_abst"
+        return getattr(self, set_name)
+
+    # TODO mapping
+    def map(self, from_set_type, to_set_type, idx):
+        pass
+
+    def get_var_set_descs(self, var_set_type):
+        if var_set_type == self.II_TYPE:
+            return self.ii_vars_desc
+        elif var_set_type == self.IO_TYPE:
+            return self.io_vars_desc
+        elif var_set_type == self.OI_TYPE:
+            return self.oi_vars_desc
+        elif var_set_type == self.OO_TYPE:
+            return self.oo_vars_desc
+        else:
+            raise AttributeError("Invalid var set type : %s." % var_set_type)
+
+    def var_set_size(self, var_set_type):
+        var_set_descs = self.get_var_set_descs(var_set_type)
+        total = sum([n for n, _type in var_set_descs])
+        return total
+
+    def select(self, var_set_type, var_type, source=None):
+        '''
+        Select 'var_type' vars from 'source' which is a 'var_set_type'
+        list. If 'source' is None, return indexs instead.
+        '''
+        # TODO add var_set_type list
+        size = self.var_set_size(var_set_type)
+        var_set_descs = self.get_var_set_descs(var_set_type)
+        if source is None:
+            source = range(size)
+        else:
+            len(source) == size
+
+        subset = []
+        start = 0
+        for count, _var_type in var_set_descs:
+            end = start + count
+            if _var_type == var_type:
+                subset.extend(source[start:end])
+        return subset
+
+    def create_list(self, var_set_type):
+        '''
+        Create list for 'var_set_type' filled with None.
+        '''
+        n = self.var_set_size(var_set_type)
+        return [None for i in xrange(n)]
+
 def safe_new(x, tag='', dtype=None):
     """
     Internal function that constructs a new variable from x with the same
