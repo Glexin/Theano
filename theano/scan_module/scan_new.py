@@ -412,7 +412,7 @@ def scan(fn,
         raise ValueError(' n_steps must be an int. dtype provided '
                          'is %s' % n_steps.dtype)
 
-    n_outs = len(outs_info)
+    n_outs_si = len(outs_info)
 
     return_steps = OrderedDict()
     # wrap sequences in a dictionary if they are not already dictionaries
@@ -426,7 +426,7 @@ def scan(fn,
             seq['taps'] = [0]
 
     # wrap outputs info in a dictionary if they are not already in one
-    for i, out_info in xrange(outs_info):
+    for i, out_info in enumerate(outs_info):
         if out_info is not None:
             if isinstance(out_info, dict):
                 # DEPRECATED :
@@ -490,7 +490,7 @@ def scan(fn,
     #        and to construct a new and complete list of inputs and
     #        outputs
 
-    n_seqs = 0
+    n_seqs_oi = 0
     oi_seqs = []     # Variables passed as inputs to the scan op
     ii_seqs_slices = []    # Variables passed as inputs to the inner function
     seq_direct_cal_slices = []  # Actual slices if scan is removed from the
@@ -563,7 +563,7 @@ def scan(fn,
                 oi_seqs.append(nw_seq)
                 ii_seqs_slices.append(ii_slice)
                 seq_direct_cal_slices.append(direct_cal_slice)
-                n_seqs += 1
+                n_seqs_oi += 1
 
     # Since we've added all sequences now we need to level them up based on
     # n_steps or their different shapes
@@ -901,16 +901,16 @@ def scan(fn,
     tmp_dummy_f_outs = len(dummy_f.maker.outputs)
     if as_while:
         tmp_dummy_f_outs -= 1
-    if not (tmp_dummy_f_outs == n_outs or outs_info == []):
+    if not (tmp_dummy_f_outs == n_outs_si or outs_info == []):
         raise ValueError('Please provide None as outputs_info for '
                          'any output that does not feed back into '
                          'scan (i.e. it behaves like a map) ')
 
     if outs_info == []:
-        n_outs = len(dummy_f.maker.outputs)
+        dummy_n_outs = len(dummy_f.maker.outputs)
         if as_while:
-            n_outs = n_outs - 1
-        outs_info = [OrderedDict() for x in xrange(n_outs)]
+            dummy_n_outs = dummy_n_outs - 1
+        outs_info = [OrderedDict() for x in xrange(dummy_n_outs)]
 
     # Step 5.1 Outputs with taps different then -1
 
@@ -979,7 +979,7 @@ def scan(fn,
                 shared_ios.append(input.update)
                 givens[input.variable] = new_var
                 n_shared_outs += 1
-    n_sit_sot_sis = len(sit_sot_iis)
+    n_sit_sot_iis = len(sit_sot_iis)
     # Step 5.4 Outputs with no taps used in the input
     n_nit_sot_sis = 0
     nit_sot_ios = []
@@ -1087,18 +1087,18 @@ def scan(fn,
     # Step 7. Create the Scan Op
     ##
 
-    tap_array = mit_sot_tap_array + [[-1] for x in xrange(n_sit_sot_sis)]
+    tap_array = mit_sot_tap_array + [[-1] for x in xrange(n_sit_sot_iis)]
     if allow_gc is None:
         allow_gc = config.scan.allow_gc
     info = OrderedDict()
 
     info['tap_array'] = tap_array
-    info['n_seqs'] = n_seqs
+    info['n_seqs'] = n_seqs_oi
     info['n_mit_mot'] = n_mit_mot
     info['n_mit_mot_outs'] = n_mit_mot_outs
     info['mit_mot_out_slices'] = mit_mot_out_slices
     info['n_mit_sot'] = n_mit_sot_sis
-    info['n_sit_sot'] = n_sit_sot_sis
+    info['n_sit_sot'] = n_sit_sot_iis
     info['n_shared_outs'] = n_shared_outs
     info['n_nit_sot'] = n_nit_sot_sis
     info['truncate_gradient'] = truncate_gradient
@@ -1169,13 +1169,13 @@ def scan(fn,
         offsets)
 
     offset += n_mit_sot_sis
-    offsets = [1 for x in xrange(n_sit_sot_sis)]
+    offsets = [1 for x in xrange(n_sit_sot_iis)]
     sit_sot_outs = remove_dimensions(
-        oos[offset:offset + n_sit_sot_sis],
+        oos[offset:offset + n_sit_sot_iis],
         sit_sot_return_steps,
         offsets)
 
-    offset += n_sit_sot_sis
+    offset += n_sit_sot_iis
     nit_sot_outs = remove_dimensions(
         oos[offset:offset + n_nit_sot_sis],
         nit_sot_return_steps)

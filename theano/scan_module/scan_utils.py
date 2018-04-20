@@ -39,6 +39,10 @@ _logger = logging.getLogger('theano.scan_utils')
 
 
 def flatten_gen(list2d):
+    '''
+    TODO
+
+    '''
     for l in list2d:
         for e in l:
             yield e
@@ -127,13 +131,13 @@ class ScanVarMap(object):
 
     N_STEP_COMBO_TAG = (N_STEP_TAG,)
     CONDITION_COMBO_TAG = (CONDITION_TAG,)
-    SEQ_COMBO_TAG = (SEQ_TAG,)
+    SEQ_COMBO_TAG = (SCFN_TAG, SEQ_TAG,)
     # TODO mitmot is for grad.
     MITMOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, MITMOT_TAG,)
     MITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, MITSOT_TAG,)
     SITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, SITSOT_TAG,)
     NITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, NITSOT_TAG,)
-    SHARED_COMBO_TAG = (SCFN_TAG, SCFN_NONSEQ_FILTER, SHARED_TAG, STATIC_TAG)
+    SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, STATIC_TAG)
     DYNAMIC_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
             UNEXT_TAG)
     SITSOT_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
@@ -146,7 +150,7 @@ class ScanVarMap(object):
     VALID_VAR_TAGS = (N_STEP_COMBO_TAG, CONDITION_COMBO_TAG, SEQ_COMBO_TAG,
             MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
             NITSOT_COMBO_TAG, SHARED_COMBO_TAG, DYNAMIC_SHARED_COMBO_TAG,
-            SITSOT_SHARED_COMBO_TAG, CONDITION_COMBO_TAG, NS_INPUT_COMBO_TAG,
+            SITSOT_SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG, CONST_COMBO_TAG,
             HIDDEN_NS_INPUT_COMBO_TAG)
 
     # Var set types.
@@ -163,11 +167,13 @@ class ScanVarMap(object):
     SET_TYPES = (II_TYPE, IO_TYPE, OI_TYPE, OO_TYPE, SCFNI_SEQ_TYPE,
                  SCFNI_OUTPUT_TYPE, SCFNI_NONSEQ_TYPE, SCFNO_TYPE, STFNI_TYPE)
 
+    # TODO check if const is in
     # TODO add hidden combo into order
     # TODO check all tag in order is in VALID_VAR_TAGS
     II_ORDER = (SEQ_COMBO_TAG, MITMOT_COMBO_TAG, MITSOT_COMBO_TAG,
             SITSOT_COMBO_TAG, SITSOT_SHARED_COMBO_TAG,
-            DYNAMIC_SHARED_COMBO_TAG, SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG)
+            DYNAMIC_SHARED_COMBO_TAG, SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG,
+            HIDDEN_NS_INPUT_COMBO_TAG)
     IO_ORDER = (MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
             SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
             DYNAMIC_SHARED_COMBO_TAG, CONDITION_COMBO_TAG)
@@ -183,7 +189,6 @@ class ScanVarMap(object):
     SCFNI_NONSEQ_ORDER = (SCFN_NONSEQ_FILTER,)
     SCFNO_ORDER = (SCFN_OUTPUT_FILTER,)
     STFNI_ORDER = (SEQ_COMBO_TAG, SCFN_OUTPUT_FILTER, SCFN_NONSEQ_FILTER)
-    # TODO rank STFNI output
 
     @classmethod
     def _get_var_set_order(cls, set_type):
@@ -218,14 +223,14 @@ class ScanVarMap(object):
             True if 'tag' matches criterion descripted by 'includes' and
             'excludes', else False.
         '''
-        assert isinstance(ctag, [list, tuple])
-        assert isinstance(includes, [list, tuple])
-        assert isinstance(excludes, [list, tuple])
+        assert isinstance(ctag, (list, tuple))
         if includes:
+            assert isinstance(includes, (list, tuple))
             for _tag in includes:
                 if _tag not in ctag:
                     return False
         if excludes:
+            assert isinstance(excludes, (list, tuple))
             for _tag in excludes:
                 if _tag in ctag:
                     return False
@@ -238,8 +243,8 @@ class ScanVarMap(object):
         or more tag then 'target_ctag', we call 'ctag' is a subtag of
         'target_ctag' and we say 'ctag' belong to 'target_ctag'.
         '''
-        assert isinstance(ctag, [list, tuple])
-        assert isinstance(target_ctag, [list, tuple])
+        assert isinstance(ctag, (list, tuple))
+        assert isinstance(target_ctag, (list, tuple))
         includes = target_ctag
         return cls.tag_check(ctag, includes)
 
@@ -276,10 +281,11 @@ class ScanVarMap(object):
         int
             Index of first combo ctag in ``target_ctags`` who ``ctag`` belong to,
             -1 if not found.
+
         '''
-        assert isinstance(ctag, [list, tuple])
+        assert isinstance(ctag, (list, tuple))
         for target_ctag in target_ctags:
-            assert isinstance(target_ctag, [list, tuple])
+            assert isinstance(target_ctag, (list, tuple))
 
         for i, target_ctag in enumerate(target_ctags):  # exact
             if ctag == target_ctag:
@@ -290,6 +296,11 @@ class ScanVarMap(object):
             if cls.ctag_belong(ctag, target_ctag):
                 return i
         return -1
+
+    @classmethod
+    def ctag_belong_multi(cls, ctag, target_ctags):
+        idx = cls.find_ctag_belong(ctag, target_ctags)
+        return idx != -1
 
     ##
     # Code check
@@ -335,21 +346,7 @@ class ScanVarMap(object):
 
     ## End code check
 
-    def __init__(self,
-                 mitmot_infos,
-                 mitsot_infos,
-                 n_sitsot_sis,
-                 n_nitsot_sis,
-                 shared_infos,
-                 nonseq_infos):
-        '''
-        Parameters
-        ----------
-        mitmot_info : List
-            List of tuple of (n_in, n_out) of each mitmot_si var.
-        mitsot_info : List
-            List of n_in of each mitsot_si var.
-        '''
+    def __init__(self):
         self.ii_2_abst = []
         self.io_2_abst = []
         self.oi_2_abst = []
@@ -362,26 +359,8 @@ class ScanVarMap(object):
         self.abst_vars_meta = []
         # TODO doc
         self.listen_lists = {}
-        # n_step
-        self._add_var(0, 0, 1, 0, self.N_STEP_TYPE)
-        # mitmot
-        for n_in, n_out in mitmot_infos:
-            # TODO Check ois mitmot n_in.
-            self._add_var(n_in, n_out, n_in, n_out, self.MITMOT_TYPE)
-        # mitsot
-        for n_in in mitsot_infos:
-            self._add_var(n_in, 1, n_in, 1, self.MITSOT_TYPE)
-        # sitsot
-        for i in n_sitsot_sis:
-            self._add_var(1, 1, 1, 1, self.SITSOT_TYPE)
-        # nitsot
-        for i in n_nitsot_sis:
-            self._add_var(0, 1, 0, 1, self.SITSOT_TYPE)
-        # TODO shared
-        # TODO nonseq
 
-    def _add_var(self, abst_var_meta):
-        # TODO abst_var_meta doc
+    def add_var(self, abst_var_meta):
         '''
         WARNING : _add_var should be called following the right order
         of vars of a var tag, but not need to follow the order of var
@@ -390,32 +369,49 @@ class ScanVarMap(object):
         Parameters
         ----------
         abst_var_meta : dict
-            keys:
-                abst_idx
-                tag
-                n_in optional, for seqs, outputs
-                n_out optional, for outputs
-                scfn_rank optional, scfn outputs and scfn nonseqs
-                    scfn_rank can be scfn_nonseq_rank or
-                    scfn_output_rank, we don't seperate them by key.
+            Entrys:
+                name : Optional
+                abst_idx : Abstract variable index, user should not
+                    provide value for this entry though the value
+                    provided will not be used.
+                tag : Combo tag in ``VALID_VAR_TAGS``.
+                n_in : Optional, for seqs, outputs who has multiple
+                    taps.
+                n_out : optional, for mitmot.
+                scfn_rank : Optional,
+                    scfn_rank can be this var's rank in scfn_seqs or
+                    scfn_nonseqs or scfn_outputs depend on the tag of
+                    this var.
+
+        Returns
+        -------
+        int, abstract var index.
+
         '''
+        abst_var_meta = copy(abst_var_meta)
+        if abst_var_meta["tag"] == self.MITMOT_COMBO_TAG:
+            # TODO
+            raise NotImplementedError("Mitmot type in not implemented"
+                                      " yet.")
         assert abst_var_meta["tag"] in self.VALID_VAR_TAGS
         self.abst_vars_meta.append(abst_var_meta)
-        abst_var_meta["abst_idx"] = len(self.abst_vars_meta)
+        abst_idx = len(self.abst_vars_meta) - 1
+        abst_var_meta["abst_idx"] = abst_idx
         for set_type in self.SET_TYPES:
             self._add_var_to_set(set_type, abst_var_meta)
+        return abst_idx
 
     def _add_var_to_set(self, set_type, abst_var_meta):
         var_ctag = abst_var_meta["tag"]
-        abst_idxs = self._get_abst_idxs_by_set(set_type)
-        vars_meta = self.abst_vars_meta[abst_idxs]
-        vars_ctag = [meta["tag"] for meta in vars_meta]
+        abst_idxs = self.get_abst_idxs_by_set(set_type)
+        vars_meta = self.get_abst_metas_by_set(set_type)
+        vars_ctag = [_meta["tag"] for _meta in vars_meta]
         # n
         n = 0
         if set_type == self.II_TYPE:
             if var_ctag in [self.SITSOT_COMBO_TAG, self.SITSOT_SHARED_COMBO_TAG,
-                    self.DYNAMIC_SHARED_COMBO_TAG, self.STATIC_SHARED_COMBO_TAG,
-                    self.NS_INPUT_COMBO_TAG]:
+                    self.DYNAMIC_SHARED_COMBO_TAG, self.SHARED_COMBO_TAG,
+                    self.NS_INPUT_COMBO_TAG, self.HIDDEN_NS_INPUT_COMBO_TAG]:
                 n = 1
             elif var_ctag in [self.SEQ_COMBO_TAG, self.MITMOT_COMBO_TAG,
                     self.MITSOT_COMBO_TAG]:
@@ -430,8 +426,8 @@ class ScanVarMap(object):
         elif set_type == self.OI_TYPE:
             if var_ctag in [self.N_STEP_COMBO_TAG, self.SITSOT_COMBO_TAG,
                     self.SITSOT_SHARED_COMBO_TAG, self.DYNAMIC_SHARED_COMBO_TAG,
-                    self.NITSOT_COMBO_TAG, self.STATIC_SHARED_COMBO_TAG,
-                    self.SCFN_NONSEQ_FILTER]:
+                    self.NITSOT_COMBO_TAG, self.SHARED_COMBO_TAG,
+                    self.NS_INPUT_COMBO_TAG, self.HIDDEN_NS_INPUT_COMBO_TAG]:
                 n = 1
             elif var_ctag in [self.SEQ_COMBO_TAG, self.MITMOT_COMBO_TAG,
                     self.MITSOT_COMBO_TAG]:
@@ -455,38 +451,50 @@ class ScanVarMap(object):
             if self.ctag_belong(var_ctag, self.SCFN_OUTPUT_FILTER):
                 n = 1
         elif set_type == self.STFNI_TYPE:
-            idxs = self.find_ctag_belong(var_ctag,
-                    [self.SEQ_COMBO_TAG, self.SCFN_OUTPUT_FILTER])
-            if len(idxs) != 0:
+            if self.ctag_belong_multi(var_ctag,
+                                      [self.SEQ_COMBO_TAG, self.MITSOT_COMBO_TAG]):
                 n = abst_var_meta["n_in"]
-            elif self.ctag_belong(var_ctag, self.SCFN_NONSEQ_FILTER):
+            elif self.ctag_belong_multi(var_ctag,
+                        (self.SCFN_NONSEQ_FILTER, self.SITSOT_COMBO_TAG,
+                         self.NITSOT_COMBO_TAG)):
                 n = 1
         else:
             raise AttributeError("Unrecogized set type : %s." % set_type)
+        if n == 0:
+            return
         # Find position to insert.
         tag_order = self._get_var_set_order(set_type)
         tag_pos = self.find_ctag_belong(var_ctag, tag_order)
+        assert tag_pos != -1
+        tags_after_incl = tag_order[tag_pos:]
         tags_after = tag_order[tag_pos+1:]
-        pos = 0
+        start = 0
         for _var_tag in vars_ctag:
-            if _var_tag in tags_after:
+            if self.ctag_belong_multi(_var_tag, tags_after_incl):
                 break
             else:
-                pos += 1
-        if set_type in [self.SCFNI_OUTPUT_TYPE, self.SCFNI_NONSEQ_TYPE,
-                self.SCFNO_ORDER, self.STFNI_ORDER]:
-            end = pos
-            scfn_rank = meta["scnf_rank"]
-            for i in reversed(range(end)):
-                _meta = vars_meta[i]
-                _scfn_rank = _meta["scfn_rank"]
-                if scfn_rank > _scfn_rank:
-                    break
-                elif scfn_rank < _scfn_rank:
-                    pos = i
-                else:
-                    raise AttributeError("scfn_rank conflict or var has"
-                            "been added.")
+                start += 1
+        end = 0
+        for _var_tag in vars_ctag:
+            if self.ctag_belong_multi(_var_tag, tags_after):
+                break
+            else:
+                end += 1
+        pos = end
+        if start != end:
+            scfn_rank = abst_var_meta.get("scfn_rank", None)
+            if scfn_rank is not None:
+                for i in reversed(range(start, end)):
+                    _meta = vars_meta[i]
+                    _scfn_rank = _meta["scfn_rank"]
+                    if scfn_rank > _scfn_rank:
+                        break
+                    elif scfn_rank < _scfn_rank:
+                        pos = i
+                    else:
+                        raise AttributeError("scfn_rank conflict or var has"
+                                "been added.")
+
         # Insert
         for i in range(n):
             abst_idxs.insert(pos, abst_var_meta["abst_idx"])
@@ -496,6 +504,182 @@ class ScanVarMap(object):
             for i in range(n):
                 _list.insert(pos, None)
 
+    ##
+    # Var sets methods
+    ##
+
+    def get_abst_idxs_by_set(self, set_type):
+        assert set_type in self.SET_TYPES
+        set_name = set_type.lower() + "_2_abst"
+        return getattr(self, set_name)
+
+    def get_abst_metas_by_set(self, set_type):
+        abst_idxs = self.get_abst_idxs_by_set(set_type)
+        abst_metas = [self.abst_vars_meta[i] for i in abst_idxs]
+        return abst_metas
+
+    def get_abmetas_and_offsets_by_set(self, set_type):
+        abst_metas = self.get_abst_metas_by_set(set_type)
+        prev_idx = -1
+        offset = 0
+        offsets = []
+        for meta in abst_metas:
+            idx = meta["abst_idx"]
+            if idx == prev_idx:
+                offset += 1
+            else:
+                offset == 0
+            offsets.append(offset)
+        return zip(abst_metas, offsets)
+
+    def var_set_size(self, var_set_type):
+        abst_idxs = self.get_abst_idxs_by_set(var_set_type)
+        return len(abst_idxs)
+
+    def create_list(self, var_set_type, listen):
+        '''
+        Create list for ``var_set_type`` filled with None.
+
+        Parameters
+        ----------
+        var_set_type : One of the ``SET_TYPES``.
+        listen : bool
+            If regist the created list to be updated with this
+            ``ScanVarMap`` object.
+
+        '''
+        n = self.var_set_size(var_set_type)
+        _list = [None for i in xrange(n)]
+        if listen:
+            self.regist_list(_list, var_set_type)
+
+    def get_var_set_vprops(self, set_type, prop, default=None):
+        abst_metas = self.get_abst_metas_by_set(set_type)
+        vprops = [meta.get(prop, default) for meta in abst_metas]
+        return vprops
+
+    ##
+    # Var methods
+    ##
+
+    def select_by_abst_var(self, set_type, abidx, _list=None):
+        '''
+        Get values of the abstract var with index ``abidx`` in ``_list``
+        with ``set_type``, if ``_list`` is not given, return
+        positions(indeces) of this abstract var in ``set_type``.
+
+        Parameters
+        ----------
+        set_type
+        abidx
+            Index of the target var.
+        _list
+            _list with set type ``set_type`` to be select from. If is
+            not given or None, use indeces of ``set_type`` instead.
+
+        Returns
+        -------
+            List of values of the target abstract var in ``_list``,
+            if ``_list`` is not given, return indeces of target var
+            in ``set_type``.
+
+        '''
+
+        if _list is None:
+            _list = range(self.var_set_size(set_type))
+        abidxs = self.get_abst_idxs_by_set(set_type)
+        assert len(abidxs) == len(_list)
+        sublist = []
+        for _abidx, ele in zip(abidxs, _list):
+            if _abidx == abidx:
+                sublist.append(ele)
+        return sublist
+
+    def set_list_by_abst_var(self, set_type, _list, abidx, values):
+        '''
+        Set ``values`` in ``_list`` with set type ``set_type`` at
+        positions corresponse to abstract var with index ``abidx``.
+
+        Parameters
+        ----------
+        set_type
+        _list
+            List to be set values in.
+        abst_idx
+            Abstract index of target abstract var.
+        values : list or a single value
+            Values of target abstract var to be set.
+
+        '''
+        list_idxs = self.select_by_abst_var(set_type, abidx)
+        assert len(list_idxs) == len(values)
+        for list_idx, value in zip(list_idxs, values):
+            _list[list_idx] = value
+
+    def select_by_entry(self, set_type, abidx, offset=0, _list=None):
+        '''
+        Get value of entry defined by ``abidx`` and ``offset`` from
+        ``_list`` with ``set_type``, if ``_list`` is not given, return
+        position(index) of this entry in ``set_type``.
+
+        Parameters
+        ----------
+        set_type
+        abidx
+            Index of the target abstract var.
+        offset
+            Rank of target entry among entries of the target var in
+            ``_list``, count from 0.
+        _list
+            _list with set type ``set_type`` to be select from. If is
+            not given or None, use indeces of ``set_type`` instead.
+
+        Returns
+        -------
+            Value of the target entry in ``_list``,
+            if ``_list`` is not given, return index of target entry
+            in ``set_type``.
+
+        '''
+
+        if _list is None:
+            _list = range(self.var_set_size(set_type))
+        abidxs = self.get_abst_idxs_by_set(set_type)
+        assert len(abidxs) == len(_list)
+        _offset = 0
+        for _abidx, ele in zip(abidxs, _list):
+            if _abidx == abidx:
+                if _offset == offset:
+                    return ele
+                else:
+                    _offset += 1
+        raise IndexError("Offset is out of range.")
+
+    def set_list_by_entry(self, set_type, _list, abst_idx, offset,
+                          value):
+        '''
+        Set ``value`` in ``_list`` with set type ``set_type`` at
+        position corresponse to target entry defined by ``abidx``
+        and ``offset``.
+
+        Parameters
+        ----------
+        set_type
+        _list
+            List to be set values in.
+        abst_idx
+            Abstract index of target abstract var.
+        offset
+            Rank of target entry among entries of the target var in
+            ``_list``, count from 0.
+        value
+            Value of target entry to be set.
+
+        '''
+        list_idxs = self.select_by_abst_var(set_type, abst_idx)
+        list_idx = list_idxs[offset]
+        _list[list_idx] = value
+
     def unregist_list(self, _list, set_type):
         lists = self.listen_lists.get(set_type)
         assert _list in lists
@@ -503,38 +687,17 @@ class ScanVarMap(object):
         assert _list not in lists
 
     def regist_list(self, _list, set_type):
-        assert len(list) == len(self._get_abst_idxs_by_set(set_type))
+        assert len(_list) == len(self.get_abst_idxs_by_set(set_type))
         lists = self.listen_lists.get(set_type, [])
         assert _list not in lists
         lists.append(_list)
         self.listen_lists[set_type] = lists
 
-    def _get_abst_idxs_by_set(self, set_type):
-        assert set_type in self.SET_TYPES
-        set_name = set_type.lower() + "_2_abst"
-        return getattr(self, set_name)
-
     # TODO mapping
     def map(self, from_set_type, to_set_type, idx):
         pass
 
-    def get_var_set_descs(self, var_set_type):
-        if var_set_type == self.II_TYPE:
-            return self.ii_vars_desc
-        elif var_set_type == self.IO_TYPE:
-            return self.io_vars_desc
-        elif var_set_type == self.OI_TYPE:
-            return self.oi_vars_desc
-        elif var_set_type == self.OO_TYPE:
-            return self.oo_vars_desc
-        else:
-            raise AttributeError("Invalid var set type : %s." % var_set_type)
-
-    def var_set_size(self, var_set_type):
-        var_set_descs = self.get_var_set_descs(var_set_type)
-        total = sum([n for n, _type in var_set_descs])
-        return total
-
+    # TODO update
     def select(self, var_set_type, var_type, source=None):
         '''
         Select 'var_type' vars from 'source' which is a 'var_set_type'
@@ -555,13 +718,6 @@ class ScanVarMap(object):
             if _var_type == var_type:
                 subset.extend(source[start:end])
         return subset
-
-    def create_list(self, var_set_type):
-        '''
-        Create list for 'var_set_type' filled with None.
-        '''
-        n = self.var_set_size(var_set_type)
-        return [None for i in xrange(n)]
 
 def safe_new(x, tag='', dtype=None):
     """
