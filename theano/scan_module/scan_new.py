@@ -503,7 +503,7 @@ def scan(fn,
             # go through the indicated slice
             initlen = np.min(seq['taps'])
             maxtap = np.max(seq['taps'])
-            for k in seq['taps']:
+            for tap in seq['taps']:
                 # create one slice of the input
                 # Later on, if we decide not to use scan because we are
                 # going for just one step, it makes things easier if we
@@ -515,9 +515,9 @@ def scan(fn,
                 # each frame by the corresponding slice
                 # TODO when mintap is > 0, is seq[0] represents t=mintap
                 # if not, code below may be a bug.
-                direct_cal_slice = seq['input'][k - initlen]
+                direct_cal_slice = seq['input'][tap - initlen]
                 _seq_val = tensor.as_tensor_variable(seq['input'])
-                _seq_val_slice = _seq_val[k - initlen]
+                _seq_val_slice = _seq_val[tap - initlen]
                 ii_slice = _seq_val_slice.type()
 
                 # Try to transfer test_value to the new variable
@@ -536,12 +536,12 @@ def scan(fn,
                 # Add names to slices for debugging and pretty printing ..
                 # that is if the input already has a name
                 if getattr(seq['input'], 'name', None) is not None:
-                    if k > 0:
-                        nw_name = seq['input'].name + '[t+%d]' % k
-                    elif k == 0:
+                    if tap > 0:
+                        nw_name = seq['input'].name + '[t+%d]' % tap
+                    elif tap == 0:
                         nw_name = seq['input'].name + '[t]'
                     else:
-                        nw_name = seq['input'].name + '[t%d]' % k
+                        nw_name = seq['input'].name + '[t%d]' % tap
                     ii_slice.name = nw_name
 
                 # We cut the sequence such that seq[i] to correspond to
@@ -550,11 +550,11 @@ def scan(fn,
                 # too long if the taps are all lower or all higher than 0.
                 maxtap_proxy = max(maxtap, 0)
                 mintap_proxy = min(initlen, 0)
-                start = (k - mintap_proxy)
-                if k == maxtap_proxy:
+                start = (tap - mintap_proxy)
+                if tap == maxtap_proxy:
                     nw_seq = seq['input'][start:]
                 else:
-                    end = -(maxtap_proxy - k)
+                    end = -(maxtap_proxy - tap)
                     nw_seq = seq['input'][start:end]
 
                 if go_backwards:
@@ -644,7 +644,7 @@ def scan(fn,
     sit_sot_rightOrder = []
 
     # go through outputs picking up time slices as needed
-    for i, init_out in enumerate(outs_info): # sitsot
+    for i, init_out in enumerate(outs_info):
         # Note that our convention dictates that if an output uses
         # just the previous time step, as a initial state we will only
         # provide a tensor of the same dimension as one time step; This
@@ -652,7 +652,7 @@ def scan(fn,
         # they would always had to shape_padleft the initial state ..
         # which is ugly
         taps = init_out.get('taps', None)
-        if taps == [-1]:
+        if taps == [-1]: # sitsot
 
             actual_arg = init_out['initial']
             if not isinstance(actual_arg, tensor.Variable):
@@ -719,11 +719,11 @@ def scan(fn,
                 mit_sot_return_steps[n_mit_sot_sis] = return_steps[i]
             mit_sot_rightOrder.append(i)
             n_mit_sot_sis += 1
-            for k in init_out['taps']:
+            for tap in init_out['taps']:
                 # create a new slice
-                direct_cal_slice = init_out['initial'][k + initlen]
+                direct_cal_slice = init_out['initial'][tap + initlen]
                 _init_out_var = tensor.as_tensor_variable(init_out['initial'])
-                _init_out_var_slice = _init_out_var[k + initlen]
+                _init_out_var_slice = _init_out_var[tap + initlen]
                 ii_slice = _init_out_var_slice.type()
 
                 # Try to transfer test_value to the new variable
@@ -741,14 +741,14 @@ def scan(fn,
 
                 # give it a name or debugging and pretty printing
                 if getattr(init_out['initial'], 'name', None) is not None:
-                    if k > 0:
+                    if tap > 0:
                         ii_slice.name = (init_out['initial'].name +
-                                            '[t+%d]' % k)
-                    elif k == 0:
+                                            '[t+%d]' % tap)
+                    elif tap == 0:
                         ii_slice.name = init_out['initial'].name + '[t]'
                     else:
                         ii_slice.name = (init_out['initial'].name +
-                                            '[t%d]' % k)
+                                            '[t%d]' % tap)
                 mit_sot_iis.append(ii_slice)
                 mit_sot_direct_cal_slices.append(direct_cal_slice)
         # NOTE: there is another case, in which we do not want to provide
@@ -970,7 +970,6 @@ def scan(fn,
                 sit_sot_shared.append(input.variable)
                 # TODO What givens do.
                 givens[input.variable] = new_var
-
             else:
                 # TODO How to deal with shared vars with ability to
                 # cal gradient.

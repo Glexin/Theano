@@ -198,9 +198,9 @@ def scan(fn,
           sequence.
 
         * ``taps`` -- Temporal taps of the sequence required by ``fn``.
-          They are provided as a list of integers, where a value ``k``
+          They are provided as a list of integers, where a value ``tap``
           impiles that at iteration step ``t`` scan will pass to ``fn``
-          the slice ``t+k``. Default value is ``[0]``
+          the slice ``t+tap``. Default value is ``[0]``
 
         Any Theano variable in the list ``sequences`` is automatically
         wrapped into a dictionary where ``taps`` is set to ``[0]``
@@ -233,14 +233,14 @@ def scan(fn,
           coresponds to ``output[-2]``, ``init_y[4]`` corresponds to
           ``output[-1]``. While this order might seem strange, it comes
           natural from splitting an array at a given point. Assume that
-          we have a array ``x``, and we choose ``k`` to be time step
-          ``0``. Then our initial state would be ``x[:k]``, while the
-          output will be ``x[k:]``. Looking at this split, elements in
-          ``x[:k]`` are ordered exactly like those in ``init_y``.
+          we have a array ``x``, and we choose ``tap`` to be time step
+          ``0``. Then our initial state would be ``x[:tap]``, while the
+          output will be ``x[tap:]``. Looking at this split, elements in
+          ``x[:tap]`` are ordered exactly like those in ``init_y``.
         * ``taps`` -- Temporal taps of the output that will be pass to
           ``fn``. They are provided as a list of *negative* integers,
-          where a value ``k`` implies that at iteration step ``t`` scan
-          will pass to ``fn`` the slice ``t+k``.
+          where a value ``tap`` implies that at iteration step ``t`` scan
+          will pass to ``fn`` the slice ``t+tap``.
 
         ``scan`` will follow this logic if partial information is given:
 
@@ -365,6 +365,7 @@ def scan(fn,
     ##
     # Step 1. Check, unify and extract infomations from parameters.
     ##
+    scf_name = name
 
     def wrap_into_list(x):
         """
@@ -381,14 +382,14 @@ def scan(fn,
     # Unify sequences.
     seqs = wrap_into_list(sequences)
     # wrap sequences in a dictionary if they are not already dictionaries
-    for i, seq in enumerate(seqs):
-        if not isinstance(seq, dict):
-            seqs[i] = OrderedDict([('input', seq), ('taps', [0])])
-        elif seq.get('taps', None) is not None:
-            seq['taps'] = wrap_into_list(seq['taps'])
+    for i, seq_info in enumerate(seqs):
+        if not isinstance(seq_info, dict):
+            seqs[i] = OrderedDict([('input', seq_info), ('taps', [0])])
+        elif seq_info.get('taps', None) is not None:
+            seq_info['taps'] = wrap_into_list(seq_info['taps'])
         else:
             # seqs dictionary does not have the ``taps`` key
-            seq['taps'] = [0]
+            seq_info['taps'] = [0]
 
     # Unify ``outputs_info``
     outs_info = wrap_into_list(outputs_info)
@@ -422,8 +423,8 @@ def scan(fn,
                     # ^ explicitly provided a None for taps
                     _logger.warning('Output %s ( index %d) has a initial '
                             'state but taps is explicitly set to None ',
-                             getattr(out_info['initial'], 'name', 'None'),
-                             i)
+                            getattr(out_info['initial'], 'name', 'None'),
+                            i)
                 out_info['taps'] = [-1]
             elif out_info.get('taps', None) is not None:
                 # Check that taps are valid (< 0 and all dfferent)
@@ -449,7 +450,7 @@ def scan(fn,
     non_seqs = wrap_into_list(non_sequences)
     # Make sure we get rid of numpy arrays or ints or anything like that
     # passed as inputs to scan
-    for i, non_seq in non_sequences:
+    for i, non_seq in enumerate(non_seqs):
         if not isinstance(non_seq, gof.Variable):
             non_seqs[i] = tensor.as_tensor_variable(non_seq)
         else:
@@ -481,40 +482,49 @@ def scan(fn,
     svm = scan_utils.ScanVarMap()
     ois = svm.create_list(svm.OI_TYPE, listen=True)
     iis = svm.create_list(svm.II_TYPE, listen=True)
-    # TODO add osi
+    ios = svm.create_list(svm.IO_TYPE, listen=True)
+    # original dynamic shareds in oos order.
+    oos_ori_dyshared = svm.create_list(svm.OO_TYPE, listen=True)
+    oos_t0_idx = svm.create_list(svm.OO_TYPE, listen=True)
+    # TODO add osi (one step input) doc
     # TODO make sure 'direct' is fit with STFNI_TYPE
     osis = svm.create_list(svm.STFNI_TYPE, listen=True)
-    for i, seq in enumerate(seqs):
-        taps = seqs["taps"]
-        seq_val = seq['input']
-        seq_var = tensor.as_tensor_variable(seq_val)
+    for i, seq_info in enumerate(seqs):
+        taps = seq_info["taps"]
+        seq_input = seq_info['input']
+        seq_var = tensor.as_tensor_variable(seq_input)
         meta = dict(name="seq%d"%i,
                     tag=svm.SEQ_COMBO_TAG,
                     n_in=len(taps),
                     scfn_rank=i)
-        svm.add_var(meta)
+        abst_idx = svm.add_var(meta)
         # TODO test mintap maxtap bug
         mintap = np.min(taps)
         maxtap = np.min(taps)
         # TODO modify doc below
         # We cut the sequence such that seq[i] to correspond to
-        # seq[i-k]. For the purposes of cutting the sequences, we
+        # seq[i-tap]. For the purposes of cutting the sequences, we
         # need to pretend tap 0 is used to avoid cutting the sequences
         # too long if the taps are all lower or all higher than 0.
         if mintap > 0:
             t0_idx = 0
         else:
             t0_idx = -mintap
+        # ``tn1_offset`` is offset of t=last_step relative to seq[-1].
         if maxtap < 0:
-            end_offset = 0
+            tn1_offset = 0
         else:
-            end_offset = -maxtap
+            tn1_offset = -maxtap
         # TODO multi tap seq lead to mitmot grad?
-        for tap in taps:
+        for tap_i, tap in enumerate(taps):
             tap_t0_idx = t0_idx + tap
-            os_slice = seq_val[tap_t0_idx]
 
-            # TODO ii_slice doc
+            ## osi_slice
+            osi_slice = seq_input[tap_t0_idx]
+            svm.set_list_by_entry(svm.STFNI_TYPE, osis, abst_idx, tap_i,
+                    osi_slice)
+
+            ## TODO ii_slice doc
             seq_slice = seq_var[tap_t0_idx]
             ii_slice = seq_slice.type()
             # Try to transfer test_value to the new variable
@@ -529,32 +539,517 @@ def scan(fn,
                         _logger.info(('Cannot compute test value for '
                             'the inner function of scan, input value '
                             'missing %s'), e)
-
             # Add names to slices for debugging and pretty printing ..
             # that is if the input already has a name
-            if getattr(seq_val, 'name', None) is not None:
-                if k > 0:
-                    nw_name = seq['input'].name + '[t+%d]' % k
-                elif k == 0:
-                    nw_name = seq['input'].name + '[t]'
+            if getattr(seq_input, 'name', None) is not None:
+                if tap > 0:
+                    nw_name = seq_input.name + '[t+%d]' % tap
+                elif tap == 0:
+                    nw_name = seq_input.name + '[t]'
                 else:
-                    nw_name = seq['input'].name + '[t%d]' % k
+                    nw_name = seq_input.name + '[t%d]' % tap
                 ii_slice.name = nw_name
+            svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, tap_i, ii_slice)
 
-            # oi_seq doc
-            maxtap_proxy = max(maxtap, 0)
-            mintap_proxy = min(initlen, 0)
-            start = (k - mintap_proxy)
-            if k == maxtap_proxy:
-                nw_seq = seq['input'][start:]
+            ## oi_seq doc
+            start = tap + t0_idx
+            end = tap + tn1_offset
+            if end == 0:
+                oi_seq = seq_input[start:]
+                if getattr(seq_input, 'name', None) is not None:
+                    oi_seq.name = seq_input.name + "[%d:]" % start
             else:
-                end = -(maxtap_proxy - k)
-                nw_seq = seq['input'][start:end]
-
+                oi_seq = seq_input[start:end]
+                if getattr(seq_input, 'name', None) is not None:
+                    oi_seq.name = seq_input.name + "[%d:%d]" % (start, end)
             if go_backwards:
-                nw_seq = nw_seq[::-1]
+                oi_seq = oi_seq[::-1]
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, tap_i, oi_seq)
 
-            oi_seqs.append(nw_seq)
-            ii_seqs_slices.append(ii_slice)
-            seq_direct_cal_slices.append(direct_cal_slice)
-            n_seqs_oi += 1
+    # Inference ``actual_n_steps`` from ``n_steps`` and ``seqs``.
+    if not scan_utils.isNaN_or_Inf_or_None(n_steps):
+        # If the user has provided the number of steps, do that
+        # regardless ( and raise an error later if the sequences are
+        # not long enough )
+        actual_n_steps = tensor.as_tensor(n_steps)
+    else:
+        oi_seqs = svm.select(svm.OI_TYPE, svm.SEQ_COMBO_TAG, ois)
+        min_seq_len = None
+        for oi_seq in oi_seqs:
+            seq_len = oi_seq.shape[0]
+            if min_seq_len is None:
+                min_seq_len = seq_len
+            else:
+                min_seq_len = tensor.minimum(min_seq_len, seq_len)
+        if min_seq_len is None:
+            # ^ No information about the number of steps
+            raise ValueError('No information about the number of steps '
+                            'provided. Either provide a value for '
+                            'n_steps argument of scan or provide an input '
+                            'sequence')
+        actual_n_steps = min_seq_len
+    abst_meta = dict(name='n_steps',
+                     tag=svm.N_STEP_COMBO_TAG)
+    abst_idx = svm.add_var(abst_meta)
+    svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, actual_n_steps)
+
+    # Since we've added all sequences now we need to level them up based on
+    # n_steps or their different shapes
+    # Operations below will raise an error if seq is too short for steps
+    # while evaluating.
+    nw_oi_seqs = [seq_info[:actual_n_steps] for seq_info in oi_seqs]
+    svm.set_list_by_tag(ois, svm.OI_TYPE, svm.SEQ_COMBO_TAG, nw_oi_seqs)
+
+    ## Handle ``output_infos``
+    # go through outputs picking up time slices as needed
+
+    def add_nitsot(scfn_rank):
+        abst_meta = dict(name="out_%d_nitsot"%scfn_rank,
+                         tag=svm.NITSOT_COMBO_TAG,
+                         scfn_rank=scfn_rank)
+        abst_idx = svm.add_var(abst_meta)
+        # We set entry of nitsot with actual_n_steps for later memory
+        # allocation.
+        svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, actual_n_steps)
+
+    sitsot_taps = []
+    mitsot_taps = []
+    for i, out_info in enumerate(outs_info):
+        taps = out_info.get('taps', None)
+        # Note that our convention dictates that if an output uses
+        # just the previous time step, as a initial state we will only
+        # provide a tensor of the same dimension as one time step; This
+        # makes code much cleaner for those who do not use taps. Otherwise
+        # they would always had to shape_padleft the initial state ..
+        # which is ugly
+        if taps == [-1]: # sitsot
+            sitsot_taps.append(taps)
+            abst_meta = dict(name="out_%d_sitsot"%i, tag=svm.SITSOT_COMBO_TAG,
+                scfn_rank=i)
+            abst_idx = svm.add_var(abst_meta)
+            svm.set_list_by_entry(svm.OO_TYPE, oos_t0_idx, abst_idx, 0, 1)
+            actual_arg = out_info['initial']
+            if not isinstance(actual_arg, tensor.Variable):
+                actual_arg = tensor.as_tensor_variable(actual_arg)
+            arg = safe_new(actual_arg)
+            if isinstance(arg, tensor.Constant):
+                # safe new returns a clone of the constants, but that is not
+                # what we need for initial states
+                arg = arg.type()
+
+            # Try to transfer test_value to the new variable
+            if config.compute_test_value != 'off':
+                try:
+                    arg.tag.test_value = gof.Op._get_test_value(actual_arg)
+                except AttributeError as e:
+                    if config.compute_test_value != 'ignore':
+                        # No need to print a warning or raise an error now,
+                        # it will be done when fn will be called.
+                        _logger.info(('Cannot compute test value for the '
+                            'inner function of scan, input value missing %s'),
+                                     e)
+
+            if getattr(out_info['initial'], 'name', None) is not None:
+                arg.name = out_info['initial'].name + '[t-1]'
+
+            # TODO doc
+            # We need now to allocate space for storing the output and copy
+            # the initial state over. We do this using the expand function
+            # defined in scan utils
+            sitsot_oi = scan_utils.expand_empty(
+                tensor.unbroadcast(
+                    tensor.shape_padleft(actual_arg), 0),
+                actual_n_steps)
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, sitsot_oi)
+            svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, arg)
+            svm.set_list_by_entry(svm.STFNI_TYPE, osis, abst_idx, 0, actual_arg)
+        elif taps: # mitsot
+            mitsot_taps.append(taps)
+            abst_meta = dict(name="out_%d_mitsot"%i, tag=svm.MITSOT_COMBO_TAG,
+                n_in=len(taps), scfn_rank=i)
+            abst_idx = svm.add_var(abst_meta)
+            # TODO tap = 0 error
+            if np.any(np.array(taps) > 0):
+                # Make sure we do not have requests for future values of a
+                # sequence we can not provide such values
+                raise ValueError('Can not use future taps of outputs',
+                                    out_info)
+            init_out = out_info['initial']
+            # go through the taps
+            t0_idx = -np.min(taps)
+            svm.set_list_by_entry(svm.OO_TYPE, oos_t0_idx, abst_idx, 0, t0_idx)
+            # Sequence
+            # TODO check initial length == initlen
+            # TODO is expand_empty gradable to initial
+            # TODO one var in ois for mitsot??? If yes ,why diff with
+            # seq.
+            mitsot_oi = scan_utils.expand_empty(init_out[:t0_idx],
+                                        actual_n_steps)
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, mitsot_oi)
+            init_out_var = tensor.as_tensor_variable(init_out)
+            for tap_i, tap in enumerate(taps):
+                tap_t0_idx = t0_idx + tap
+                osi_slice = init_out[tap_t0_idx]
+                _ii_slice = init_out_var[tap_t0_idx]
+                ii_slice = _ii_slice.type()
+
+                # Try to transfer test_value to the new variable
+                if config.compute_test_value != 'off':
+                    try:
+                        ii_slice.tag.test_value = gof.Op._get_test_value(
+                                _ii_slice)
+                    except AttributeError as e:
+                        if config.compute_test_value != 'ignore':
+                            # No need to print a warning or raise an
+                            # error now, it will be done when fn will be
+                            # called.
+                            _logger.info(('Cannnot compute test value for '
+                                'the inner function of scan, input value '
+                                'missing. %s'), e)
+
+                # give it a name or debugging and pretty printing
+                if getattr(init_out, 'name', None) is not None:
+                    assert tap < 0
+                    ii_slice.name = init_out.name + '[t%d]' % tap
+                svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, tap_i, ii_slice)
+                svm.set_list_by_entry(svm.STFNI_TYPE, osis, abst_idx, tap_i, osi_slice)
+        else: # nitsot
+            # NOTE: there is another case, in which we don't want to provide
+            #      any previous value of the output to the inner function
+            #      (i.e. a map); in that case we do not have to to anything
+            add_nitsot(i)
+
+    if n_fixed_steps in [1, -1]:
+        stfn_args = osis
+    else:
+        stfn_args = svm.map(svm.II_TYPE, svm.STFNI_TYPE, iis)
+
+    # when we apply the lambda expression we get a mixture of update
+    # rules and outputs that needs to be seperated
+    condition, outputs, updates = \
+            scan_utils.get_updates_and_outputs(fn(*stfn_args))
+    ios = svm.map(svm.SCFNI_OUTPUT_TYPE, svm.IO_TYPE, outputs)
+
+    ##
+    # Step 3. Check if we actually need scan and remove it if we don't
+    ##
+    if n_fixed_steps in [1, -1]:
+        # We don't need to use the scan op anymore, so we can just
+        # return the outputs and updates we have
+        if condition is not None:
+            _logger.warning(('When the number of steps is fixed and '
+                    'equal to 1, the provided stopping condition, ',
+                    str(condition), ' is ignored'))
+
+            for pos, inner_out in enumerate(outputs):
+                # TODO
+                # We need to see if we need to pad our sequences with
+                # an unbroadcastable dimension; case excample : we
+                # return an output for which we want all intermediate.
+                # If n_steps is 1 then, if we return the output as given
+                # by inner function this will represent only a slice and
+                # it will have one dimension less.
+                if isinstance(init_out.type, tensor.TensorType):
+                    outputs[pos] = tensor.unbroadcast(
+                            tensor.shape_padleft(inner_out), 0)
+                    if return_list is not True and len(outputs) == 1:
+                        outputs = outputs[0]
+        return (outputs, updates)
+    if condition:
+        as_while = True
+    else:
+        as_while = False
+
+    ##
+    # TODO Create dummy graph to find hidden inputs.
+    ##
+
+    # We can now compile a dummy function just to see what shared variable
+    # we have and what are their update rules (note that the user has
+    # the option not to pass the shared variable to scan, so we need to
+    # pick them manually and add them to scan)
+    # make the compilation as fast as possible by not applying any
+    # optimization or conversion to C [ note this region is not important
+    # for performance so we can do stuff as unoptimal as we wish ]
+
+    # extract still missing inputs (there still might be so) and add them
+    # as non sequences at the end of our args
+    fake_nonseqs = [x.type() for x in non_seqs] # make nonseqs independent
+    all_outs = list(outputs)
+    if condition is not None:
+        all_outs.append(condition)
+    # TODO add update hidden test
+    update_outs = []
+    for k, v in updates.items():
+        update_outs.append(v)
+    all_outs += update_outs
+    # some vars can be put in 'fn' implicitly, they may be inputs
+    fake_outputs = scan_utils.clone(all_outs,
+                                    replace=OrderedDict(izip(non_seqs,
+                                                             fake_nonseqs)))
+    # some vars can be put in 'fn' implicitly, they may be inputs
+    # or depend on some inputs, we add them in.
+    all_inputs = ifilter(
+        lambda x: (isinstance(x, gof.Variable) and
+                   not isinstance(x, SharedVariable) and
+                   not isinstance(x, gof.Constant)),
+        gof.graph.inputs(fake_outputs))
+    extra_inputs = [x for x in all_inputs if x not in stfn_args + fake_nonseqs]
+
+    # add only the non-shared variables and non-constants to the
+    # arguments of the dummy function [ a function should not get shared
+    # variables or constants as input ]
+    dummy_args = [arg for arg in stfn_args
+            if (not isinstance(arg, SharedVariable) and
+                not isinstance(arg, tensor.Constant))]
+    dummy_args += extra_inputs
+    dummy_outs = outputs
+    # Perform a try-except to provide a meaningful error message to the
+    # user if inputs of the inner function are missing.
+    try:
+        dummy_f = function(dummy_args,
+                           dummy_outs,
+                           updates=updates,
+                           mode=compile.mode.Mode(linker='py',
+                                                  optimizer=None),
+                           on_unused_input='ignore',
+                           profile=False)
+    except gof.fg.MissingInputError as err:
+        msg = ("\nPlease pass this variable to the scan's inner "
+               "function. Do not forget to also pass it to the "
+               "`non_sequences` attribute of scan.")
+        raise gof.fg.MissingInputError(err.args[0] + msg)
+
+    ##
+    # Step 5. Re-arange inputs of scan into more strict order
+    ##
+
+    # Step 5.0 Check the outputs of the dummy function to see if they
+    # match with ``outputs_info`` parameter
+
+    # if the number of outputs to the function does not match the number of
+    # assumed outputs until now (provided by the user) there can be
+    # only one explanation: No information is provided for any of the
+    # outputs (i.e. we are dealing with a map)
+    n_dummy_outs = len(dummy_f.maker.outputs)
+    if as_while:
+        n_dummy_outs -= 1
+    n_dummy_outs -= len(update_outs)
+    if len(outs_info) != 0:
+        if n_dummy_outs != len(outs_info):
+            raise ValueError('Please provide None as outputs_info for '
+                            'any output that does not feed back into '
+                            'scan (i.e. it behaves like a map) ')
+    else:
+        outs_info = [OrderedDict() for x in xrange(n_dummy_outs)]
+        for scfn_rank in range(n_dummy_outs):
+            add_nitsot(scfn_rank)
+
+    # Step 5.3 Outputs that correspond to update rules of shared variables
+    n_ext_dys = 0
+    # TODO
+    givens = {}
+    for input in dummy_f.maker.expanded_inputs:
+        original_var = input.variable
+        if isinstance(original_var, SharedVariable) and input.update:
+            # dynamic shared variable
+            new_var = safe_new(original_var)
+            if getattr(original_var, 'name', None) is not None:
+                new_var.name = original_var.name + "_copy"
+            # ops.expandable_types are list of types which is capable to
+            # add extra dimemsion, till when I'm writing this code,
+            # it only contains TensorType
+            if isinstance(new_var.type, ops.expandable_types):
+                # expandable dynamic shared(sitsot shared)
+                abst_meta = dict(name="ext_dynamic_shard_%d"%n_ext_dys,
+                                 tag=svm.SITSOT_SHARED_COMBO_TAG)
+                abst_idx = svm.add_var(abst_meta)
+                svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, new_var)
+                expanded = scan_utils.expand_empty(
+                    tensor.unbroadcast(
+                        tensor.shape_padleft(original_var), 0),
+                    actual_n_steps)
+                svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, expanded)
+                update_var = tensor.as_tensor_variable(input.update)
+                svm.set_list_by_entry(svm.IO_TYPE, ios, abst_idx, 0, update_var)
+                svm.set_list_by_entry(svm.OO_TYPE, oos_ori_dyshared, abst_idx, 0, original_var)
+                givens[original_var] = new_var
+            else:
+                # unexpandable dynamic shared
+                name="unexpandable_dynamic_shard_%d"%n_ext_dys
+                abst_meta = dict(name=name,
+                                 tag=svm.DYNAMIC_SHARED_COMBO_TAG)
+                abst_idx = svm.add_var(abst_meta)
+                svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, new_var)
+                svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, original_var)
+                svm.set_list_by_entry(svm.IO_TYPE, ios, abst_idx, 0, input.update)
+                givens[original_var] = new_var # givens[oi] = ii
+
+
+    # handle explicit non_seq inputs
+    for scfn_rank, non_seq in enumerate(non_seqs):
+        if (not isinstance(non_seq, SharedVariable) and
+            not isinstance(non_seq, tensor.Constant)):
+            name = "nonseq_%d_input" % scfn_rank
+            abst_meta = dict(name=name,
+                             tag=svm.NS_INPUT_COMBO_TAG,
+                             scfn_rank=scfn_rank)
+            abst_idx = svm.add_var(abst_meta)
+            ns_input_ii = safe_new(non_seq, '_copy')
+            svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, ns_input_ii)
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, non_seq)
+            givens[non_seq] = ns_input_ii
+
+    # handle hidden non_seq inputs
+    for i, _input in enumerate(extra_inputs):
+        name = "hidden_nonseq_input_%d" % i
+        abst_meta = dict(name=name,
+                            tag=svm.HIDDEN_NS_INPUT_COMBO_TAG)
+        abst_idx = svm.add_var(abst_meta)
+        input_ii = safe_new(_input, '_copy')
+        svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, input_ii)
+        svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, _input)
+        givens[_input] = input_ii
+
+    # handle static shared vars
+    static_shareds_info = [arg for arg in dummy_f.maker.expanded_inputs
+                      if isinstance(arg, SharedVariable) and not arg.update]
+
+    # handle explicit static shared vars
+    static_shared_vars = [var_info.variable for var_info in static_shareds_info]
+    static_shared_vars = set(static_shared_vars)
+    for scfn_rank, non_seq in enumerate(non_seqs):
+        if non_seq in static_shared_vars:
+            name = "nonseq_%d_static_shared" % scfn_rank
+            abst_meta = dict(name=name,
+                             tag=svm.SHARED_COMBO_TAG,
+                             scfn_rank=scfn_rank)
+            abst_idx = svm.add_var(abst_meta)
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, non_seq)
+            non_seq_ii = safe_new(non_seq, '_copy')
+            svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, non_seq_ii)
+            givens[non_seq] = non_seq_ii
+
+    # handle hidden static shared vars
+    if not strict:
+        # TODO : What does ``strict`` mean, why does it not applied on
+        # inputs or other nonseqs.
+
+        # In strict mode, shared vars used not in ``non_sequences`` will be
+        # omit, will cause exception in function compiling later.
+        non_seq_set = set(non_seqs)
+        for i, static_shared_var in enumerate(static_shared_vars):
+            name = "hidden_static_shared_%d" % i
+            abst_meta = dict(name=name,
+                             tag=svm.HIDDEN_SHARED_COMBO_TAG)
+            abst_idx = svm.add_var(abst_meta)
+            svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, static_shared_var)
+            ii_var = safe_new(static_shared_var, '_copy')
+            svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, ii_var)
+            givens[static_shared_var] = ii_var
+
+    # handle condition var
+    if condition is not None:
+        abst_meta = dict(name="condition",
+                         tag=svm.CONDITION_COMBO_TAG)
+        abst_idx = svm.add_var(abst_meta)
+        svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, condition)
+
+    # gpuarray is imported here, instead of being imported on top of
+    # the file because that would force on the user some dependencies that
+    # we might do not want to. Currently we are working on removing the
+    # dependencies on sandbox code completely.
+    from theano import gpuarray
+    if gpuarray.pygpu_activated:
+        # very often we end up in this situation when we want to replace
+        # oi_var with ii_var, where oi_var is a GPU variable and ii_var is
+        # TensorType. This is because shared variables are put on GPU
+        # right away >:|,
+        new_givens = OrderedDict()
+
+        for oi_var, ii_var in givens.items():
+            if (isinstance(oi_var.type, gpuarray.GpuArrayType) and
+                isinstance(ii_var.type, tensor.TensorType)):
+                for io_var in ios:
+                    # TODO what does that do.
+                    new_givens = traverse(io_var, oi_var, ii_var, new_givens)
+            else:
+                new_givens[oi_var] = ii_var
+    else:
+        new_givens = givens
+
+    print("\nDEBUG")
+    print(ios)
+    print(new_givens)
+    new_ios = scan_utils.clone(ios, replace=new_givens)
+
+    #* Create the Scan Op
+    tap_array = mitsot_taps + sitsot_taps
+    if allow_gc is None:
+        allow_gc = config.scan.allow_gc
+    info = OrderedDict()
+
+    # TODO convert tap_array to ii type
+    info['tap_array'] = tap_array
+    info['n_seqs'] = len(svm.select_by_tag(svm.OI_TYPE, svm.SEQ_COMBO_TAG))
+    info['n_mit_mot'] = 0
+    info['n_mit_mot_outs'] = 0
+    info['mit_mot_out_slices'] = []
+    info['n_mit_sot'] = len(svm.select_by_tag(svm.SCFNI_OUTPUT_TYPE, svm.MITSOT_COMBO_TAG))
+    info['n_sit_sot'] = len(svm.select_by_tag(svm.II_TYPE, svm.SITSOT_COMBO_TAG))
+    info['n_shared_outs'] = len(svm.select_by_tag(svm.OI_TYPE, svm.DYNAMIC_SHARED_COMBO_TAG))
+    info['n_nit_sot'] = len(svm.select_by_tag(svm.OO_TYPE, svm.NITSOT_COMBO_TAG))
+    info['truncate_gradient'] = truncate_gradient
+    info['name'] = scf_name
+    info['mode'] = mode
+    info['destroy_map'] = OrderedDict()
+    info['gpua'] = False
+    info['as_while'] = as_while
+    info['profile'] = profile
+    info['allow_gc'] = allow_gc
+    info['strict'] = strict
+
+    local_op = scan_op.Scan(iis, new_ios, info)
+
+    ##
+    # Compute the outputs using the scan op
+    ##
+
+    new_ois = []
+    for arg in ois:
+        try:
+            arg = tensor.as_tensor_variable(arg)
+        except TypeError:
+            # This happens for RandomStates for e.g. but it is a good
+            # way to make sure all inputs are tensors.
+            pass
+        new_ois.append(arg)
+    oos = local_op(*new_ois)
+    if type(oos) not in (list, tuple):
+        oos = [oos]
+
+    ##
+    # Collect final scan outputs and update rules.
+    ##
+
+
+    # Remove initials of outputs.
+    for i, t0_idx, var in enumerate(zip(oos_t0_idx, oos)):
+        if t0_idx != None and t0_idx != 0:
+            oos[i] = var[t0_idx:]
+    # collect outputs
+    scan_outs = svm.map(svm.OO_TYPE, svm.SCFNO_TYPE, oos)
+    # normalize
+    if len(scan_outs) == 0:
+        scan_outs = None
+    elif return_list is not True and len(scan_outs) == 1:
+        scan_outs = scan_outs[0]
+
+    # extract dynamic shared updates
+    update_map = OrderedDict()
+    update_pairs = zip(oos_ori_dyshared, oos)
+    update_pairs = svm.select_by_tag(svm.OO_TYPE, svm.SITSOT_SHARED_COMBO_TAG, update_pairs)
+    for ori_shared, out_seq in update_pairs:
+        update_map[ori_shared] = out_seq[-1]
+
+    return scan_outs, update_pairs
