@@ -89,7 +89,8 @@ def scan(fn,
          profile=False,
          allow_gc=None,
          strict=False,
-         return_list=False):
+         return_list=False,
+         debug_compare=False):
     """
     This function constructs and applies a Scan op to the provided
     arguments.
@@ -566,6 +567,7 @@ def scan(fn,
                 oi_seq = oi_seq[::-1]
             svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, tap_i, oi_seq)
 
+    oi_seqs = svm.select(svm.OI_TYPE, svm.SEQ_COMBO_TAG, ois)
     # Inference ``actual_n_steps`` from ``n_steps`` and ``seqs``.
     if not scan_utils.isNaN_or_Inf_or_None(n_steps):
         # If the user has provided the number of steps, do that
@@ -573,7 +575,6 @@ def scan(fn,
         # not long enough )
         actual_n_steps = tensor.as_tensor(n_steps)
     else:
-        oi_seqs = svm.select(svm.OI_TYPE, svm.SEQ_COMBO_TAG, ois)
         min_seq_len = None
         for oi_seq in oi_seqs:
             seq_len = oi_seq.shape[0]
@@ -724,10 +725,20 @@ def scan(fn,
     else:
         stfn_args = svm.map(svm.II_TYPE, svm.STFNI_TYPE, iis)
 
+    # non_seqs are not added to svm yet.
+    stfn_args = stfn_args + non_seqs
+
     # when we apply the lambda expression we get a mixture of update
     # rules and outputs that needs to be seperated
     condition, outputs, updates = \
             scan_utils.get_updates_and_outputs(fn(*stfn_args))
+    if outputs_info is None:
+        # If outputs_info is omitted, but there are outputs, outputs
+        # must be nitsots, so we auto complete outputs_info(outs_info)
+        assert(len(outs_info) == 0)
+        outs_info = [OrderedDict() for out in outputs]
+        for scfn_rank in range(len(outs_info)):
+            add_nitsot(scfn_rank)
     ios = svm.map(svm.SCFNI_OUTPUT_TYPE, svm.IO_TYPE, outputs)
 
     ##
@@ -827,6 +838,7 @@ def scan(fn,
     # Step 5.0 Check the outputs of the dummy function to see if they
     # match with ``outputs_info`` parameter
 
+    # TODO move outputs_info is None comments to above.
     # if the number of outputs to the function does not match the number of
     # assumed outputs until now (provided by the user) there can be
     # only one explanation: No information is provided for any of the
@@ -835,15 +847,13 @@ def scan(fn,
     if as_while:
         n_dummy_outs -= 1
     n_dummy_outs -= len(update_outs)
-    if len(outs_info) != 0:
-        if n_dummy_outs != len(outs_info):
-            raise ValueError('Please provide None as outputs_info for '
-                            'any output that does not feed back into '
-                            'scan (i.e. it behaves like a map) ')
-    else:
-        outs_info = [OrderedDict() for x in xrange(n_dummy_outs)]
-        for scfn_rank in range(n_dummy_outs):
-            add_nitsot(scfn_rank)
+    if n_dummy_outs != len(outs_info):
+        # TODO rm debug
+        if outputs_info is None:
+            raise Exception("outputs_info auto generation error.")
+        raise ValueError('Please provide None as outputs_info for '
+                        'any output that does not feed back into '
+                        'scan (i.e. it behaves like a map) ')
 
     # Step 5.3 Outputs that correspond to update rules of shared variables
     n_ext_dys = 0
@@ -913,7 +923,7 @@ def scan(fn,
 
     # handle static shared vars
     static_shareds_info = [arg for arg in dummy_f.maker.expanded_inputs
-                      if isinstance(arg, SharedVariable) and not arg.update]
+                      if isinstance(arg.variable, SharedVariable) and not arg.update]
 
     # handle explicit static shared vars
     static_shared_vars = [var_info.variable for var_info in static_shareds_info]
@@ -937,7 +947,6 @@ def scan(fn,
 
         # In strict mode, shared vars used not in ``non_sequences`` will be
         # omit, will cause exception in function compiling later.
-        non_seq_set = set(non_seqs)
         for i, static_shared_var in enumerate(static_shared_vars):
             name = "hidden_static_shared_%d" % i
             abst_meta = dict(name=name,
@@ -978,9 +987,6 @@ def scan(fn,
     else:
         new_givens = givens
 
-    print("\nDEBUG")
-    print(ios)
-    print(new_givens)
     new_ios = scan_utils.clone(ios, replace=new_givens)
 
     #* Create the Scan Op
@@ -1027,6 +1033,7 @@ def scan(fn,
     oos = local_op(*new_ois)
     if type(oos) not in (list, tuple):
         oos = [oos]
+    oos = list(oos)
 
     ##
     # Collect final scan outputs and update rules.
@@ -1034,7 +1041,7 @@ def scan(fn,
 
 
     # Remove initials of outputs.
-    for i, t0_idx, var in enumerate(zip(oos_t0_idx, oos)):
+    for i, (t0_idx, var) in enumerate(zip(oos_t0_idx, oos)):
         if t0_idx != None and t0_idx != 0:
             oos[i] = var[t0_idx:]
     # collect outputs
@@ -1046,10 +1053,12 @@ def scan(fn,
         scan_outs = scan_outs[0]
 
     # extract dynamic shared updates
-    update_map = OrderedDict()
+    update_map = OrderedUpdates()
     update_pairs = zip(oos_ori_dyshared, oos)
     update_pairs = svm.select_by_tag(svm.OO_TYPE, svm.SITSOT_SHARED_COMBO_TAG, update_pairs)
     for ori_shared, out_seq in update_pairs:
         update_map[ori_shared] = out_seq[-1]
 
-    return scan_outs, update_pairs
+    if debug_compare:
+        return iis, new_ios, info, scan_outs, update_map
+    return scan_outs, update_map

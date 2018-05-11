@@ -438,14 +438,14 @@ class ScanVarMap(object):
             elif var_ctag in [self.MITMOT_COMBO_TAG]:
                 n = abst_var_meta["n_out"]
         elif set_type == self.OI_TYPE:
-            if var_ctag in [self.N_STEP_COMBO_TAG, self.SITSOT_COMBO_TAG,
+            if var_ctag in [self.N_STEP_COMBO_TAG, self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
                     self.SITSOT_SHARED_COMBO_TAG, self.DYNAMIC_SHARED_COMBO_TAG,
                     self.NITSOT_COMBO_TAG, self.SHARED_COMBO_TAG,
                     self.HIDDEN_SHARED_COMBO_TAG,
                     self.NS_INPUT_COMBO_TAG, self.HIDDEN_NS_INPUT_COMBO_TAG]:
                 n = 1
-            elif var_ctag in [self.SEQ_COMBO_TAG, self.MITMOT_COMBO_TAG,
-                    self.MITSOT_COMBO_TAG]:
+            elif var_ctag in [self.SEQ_COMBO_TAG]:
+                # MITMOT_COMBO_TAG,
                 n = abst_var_meta["n_in"]
         elif set_type == self.OO_TYPE:
             if var_ctag in [self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
@@ -470,8 +470,7 @@ class ScanVarMap(object):
                                       [self.SEQ_COMBO_TAG, self.MITSOT_COMBO_TAG]):
                 n = abst_var_meta["n_in"]
             elif self.ctag_belong_multi(var_ctag,
-                        (self.SCFN_NONSEQ_FILTER, self.SITSOT_COMBO_TAG,
-                         self.NITSOT_COMBO_TAG)):
+                        (self.SCFN_NONSEQ_FILTER, self.SITSOT_COMBO_TAG)):
                 n = 1
         else:
             raise AttributeError("Unrecogized set type : %s." % set_type)
