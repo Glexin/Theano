@@ -3,6 +3,8 @@ This module provides utility functions for the Scan Op.
 
 See scan.py for details on scan.
 
+Questions:
+
 """
 from __future__ import absolute_import, print_function, division
 __docformat__ = 'restructedtext en'
@@ -129,6 +131,10 @@ class ScanVarMap(object):
 
     SCFN_OUTPUT_FILTER = (SCFN_TAG, OUTPUT_TAG)
     SCFN_NONSEQ_FILTER = (NONSEQ_TAG, SCFN_TAG)
+    SITSOT_SHARED_FILTER = (NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            SITSOT_TAG)
+    UNEXP_DYSHARED_FILTER = (NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            UNEXP_TAG)
 
     N_STEP_COMBO_TAG = (N_STEP_TAG,)
     CONDITION_COMBO_TAG = (CONDITION_TAG,)
@@ -140,9 +146,13 @@ class ScanVarMap(object):
     NITSOT_COMBO_TAG = (SCFN_TAG, OUTPUT_TAG, NITSOT_TAG,)
     SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, STATIC_TAG)
     HIDDEN_SHARED_COMBO_TAG = (HIDDEN_TAG, NONSEQ_TAG, SHARED_TAG, STATIC_TAG)
-    DYNAMIC_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+    EXP_DYSHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
             UNEXP_TAG)
-    SITSOT_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+    HID_DYSHARED_COMBO_TAG = (HIDDEN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            UNEXP_TAG)
+    EXP_SITSOT_SHARED_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
+            SITSOT_TAG)
+    HID_SITSOT_SHARED_COMBO_TAG = (HIDDEN_TAG, NONSEQ_TAG, SHARED_TAG, DYNAMIC_TAG,
             SITSOT_TAG)
     CONST_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, CONST_TAG)
     NS_INPUT_COMBO_TAG = (SCFN_TAG, NONSEQ_TAG, NS_INPUT_TAG)
@@ -152,8 +162,9 @@ class ScanVarMap(object):
     VALID_VAR_TAGS = (N_STEP_COMBO_TAG, CONDITION_COMBO_TAG, SEQ_COMBO_TAG,
             MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
             NITSOT_COMBO_TAG, SHARED_COMBO_TAG, HIDDEN_SHARED_COMBO_TAG,
-            DYNAMIC_SHARED_COMBO_TAG,
-            SITSOT_SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG, CONST_COMBO_TAG,
+            EXP_DYSHARED_COMBO_TAG, HID_DYSHARED_COMBO_TAG,
+            EXP_SITSOT_SHARED_COMBO_TAG, HID_SITSOT_SHARED_COMBO_TAG,
+            NS_INPUT_COMBO_TAG, CONST_COMBO_TAG,
             HIDDEN_NS_INPUT_COMBO_TAG)
 
     # Var set types.
@@ -174,19 +185,20 @@ class ScanVarMap(object):
     # TODO add hidden combo into order
     # TODO check all tag in order is in VALID_VAR_TAGS
     II_ORDER = (SEQ_COMBO_TAG, MITMOT_COMBO_TAG, MITSOT_COMBO_TAG,
-            SITSOT_COMBO_TAG, SITSOT_SHARED_COMBO_TAG,
-            DYNAMIC_SHARED_COMBO_TAG, SHARED_COMBO_TAG, HIDDEN_SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG,
+            SITSOT_COMBO_TAG, EXP_SITSOT_SHARED_COMBO_TAG, HID_SITSOT_SHARED_COMBO_TAG,
+            EXP_DYSHARED_COMBO_TAG, HID_DYSHARED_COMBO_TAG, SHARED_COMBO_TAG, HIDDEN_SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG,
             HIDDEN_NS_INPUT_COMBO_TAG)
     IO_ORDER = (MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
-            SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
-            DYNAMIC_SHARED_COMBO_TAG, CONDITION_COMBO_TAG)
+            EXP_SITSOT_SHARED_COMBO_TAG, HID_SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
+            EXP_DYSHARED_COMBO_TAG, HID_DYSHARED_COMBO_TAG, CONDITION_COMBO_TAG)
     OI_ORDER = (N_STEP_COMBO_TAG, SEQ_COMBO_TAG, MITMOT_COMBO_TAG, MITSOT_COMBO_TAG,
-            SITSOT_COMBO_TAG, SITSOT_SHARED_COMBO_TAG,
-            DYNAMIC_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
+            SITSOT_COMBO_TAG, EXP_SITSOT_SHARED_COMBO_TAG, HID_SITSOT_SHARED_COMBO_TAG,
+            EXP_DYSHARED_COMBO_TAG, HID_DYSHARED_COMBO_TAG, NITSOT_COMBO_TAG,
             SHARED_COMBO_TAG, HIDDEN_SHARED_COMBO_TAG, NS_INPUT_COMBO_TAG, HIDDEN_NS_INPUT_COMBO_TAG)
     # TODO check sitsot_shared in oo
     OO_ORDER = (MITMOT_COMBO_TAG, MITSOT_COMBO_TAG, SITSOT_COMBO_TAG,
-                SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG)
+                EXP_SITSOT_SHARED_COMBO_TAG, HID_SITSOT_SHARED_COMBO_TAG, NITSOT_COMBO_TAG,
+                EXP_DYSHARED_COMBO_TAG, HID_DYSHARED_COMBO_TAG)
     SCFNI_SEQ_ORDER = (SEQ_COMBO_TAG,)
     SCFNI_OUTPUT_ORDER = (SCFN_OUTPUT_FILTER,)
     SCFNI_NONSEQ_ORDER = (SCFN_NONSEQ_FILTER,)
@@ -422,8 +434,9 @@ class ScanVarMap(object):
         # n
         n = 0
         if set_type == self.II_TYPE:
-            if var_ctag in [self.SITSOT_COMBO_TAG, self.SITSOT_SHARED_COMBO_TAG,
-                    self.DYNAMIC_SHARED_COMBO_TAG, self.SHARED_COMBO_TAG,
+            if var_ctag in [self.SITSOT_COMBO_TAG, self.EXP_SITSOT_SHARED_COMBO_TAG, self.HID_SITSOT_SHARED_COMBO_TAG,
+                    self.EXP_DYSHARED_COMBO_TAG, self.HID_DYSHARED_COMBO_TAG,
+                    self.SHARED_COMBO_TAG,
                     self.HIDDEN_SHARED_COMBO_TAG,
                     self.NS_INPUT_COMBO_TAG, self.HIDDEN_NS_INPUT_COMBO_TAG]:
                 n = 1
@@ -432,14 +445,14 @@ class ScanVarMap(object):
                 n = abst_var_meta["n_in"]
         elif set_type == self.IO_TYPE:
             if var_ctag in [self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
-                    self.SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG,
-                    self.DYNAMIC_SHARED_COMBO_TAG, self.CONDITION_COMBO_TAG]:
+                    self.EXP_SITSOT_SHARED_COMBO_TAG, self.HID_SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG,
+                    self.EXP_DYSHARED_COMBO_TAG, self.HID_DYSHARED_COMBO_TAG, self.CONDITION_COMBO_TAG]:
                 n = 1
             elif var_ctag in [self.MITMOT_COMBO_TAG]:
                 n = abst_var_meta["n_out"]
         elif set_type == self.OI_TYPE:
             if var_ctag in [self.N_STEP_COMBO_TAG, self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
-                    self.SITSOT_SHARED_COMBO_TAG, self.DYNAMIC_SHARED_COMBO_TAG,
+                    self.EXP_SITSOT_SHARED_COMBO_TAG, self.HID_SITSOT_SHARED_COMBO_TAG, self.EXP_DYSHARED_COMBO_TAG, self.HID_DYSHARED_COMBO_TAG,
                     self.NITSOT_COMBO_TAG, self.SHARED_COMBO_TAG,
                     self.HIDDEN_SHARED_COMBO_TAG,
                     self.NS_INPUT_COMBO_TAG, self.HIDDEN_NS_INPUT_COMBO_TAG]:
@@ -449,7 +462,8 @@ class ScanVarMap(object):
                 n = abst_var_meta["n_in"]
         elif set_type == self.OO_TYPE:
             if var_ctag in [self.MITSOT_COMBO_TAG, self.SITSOT_COMBO_TAG,
-                    self.SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG]:
+                    self.EXP_SITSOT_SHARED_COMBO_TAG, self.HID_SITSOT_SHARED_COMBO_TAG, self.NITSOT_COMBO_TAG,
+                            self.EXP_DYSHARED_COMBO_TAG, self.HID_DYSHARED_COMBO_TAG]:
                 n = 1
             elif var_ctag in [self.MITMOT_COMBO_TAG]:
                 n = abst_var_meta["n_out"]
@@ -547,8 +561,9 @@ class ScanVarMap(object):
             if idx == prev_idx:
                 offset += 1
             else:
-                offset == 0
+                offset = 0
             offsets.append(offset)
+            prev_idx = idx
         return zip(abst_metas, offsets)
 
     def var_set_size(self, var_set_type):

@@ -55,6 +55,7 @@ __contact__ = "Razvan Pascanu <r.pascanu@gmail>"
 
 import logging
 import numpy as np
+import theano
 import warnings
 from collections import OrderedDict
 
@@ -482,6 +483,7 @@ def scan(fn,
     # TODO combine docs in scan_new487-491
     svm = scan_utils.ScanVarMap()
     ois = svm.create_list(svm.OI_TYPE, listen=True)
+    outs_taps = svm.create_list(svm.OI_TYPE, listen=True)
     iis = svm.create_list(svm.II_TYPE, listen=True)
     ios = svm.create_list(svm.IO_TYPE, listen=True)
     # original dynamic shareds in oos order.
@@ -501,7 +503,7 @@ def scan(fn,
         abst_idx = svm.add_var(meta)
         # TODO test mintap maxtap bug
         mintap = np.min(taps)
-        maxtap = np.min(taps)
+        maxtap = np.max(taps)
         # TODO modify doc below
         # We cut the sequence such that seq[i] to correspond to
         # seq[i-tap]. For the purposes of cutting the sequences, we
@@ -512,7 +514,7 @@ def scan(fn,
         else:
             t0_idx = -mintap
         # ``tn1_offset`` is offset of t=last_step relative to seq[-1].
-        if maxtap < 0:
+        if maxtap <= 0:
             tn1_offset = 0
         else:
             tn1_offset = -maxtap
@@ -613,8 +615,6 @@ def scan(fn,
         # allocation.
         svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, actual_n_steps)
 
-    sitsot_taps = []
-    mitsot_taps = []
     for i, out_info in enumerate(outs_info):
         taps = out_info.get('taps', None)
         # Note that our convention dictates that if an output uses
@@ -624,7 +624,6 @@ def scan(fn,
         # they would always had to shape_padleft the initial state ..
         # which is ugly
         if taps == [-1]: # sitsot
-            sitsot_taps.append(taps)
             abst_meta = dict(name="out_%d_sitsot"%i, tag=svm.SITSOT_COMBO_TAG,
                 scfn_rank=i)
             abst_idx = svm.add_var(abst_meta)
@@ -662,10 +661,10 @@ def scan(fn,
                     tensor.shape_padleft(actual_arg), 0),
                 actual_n_steps)
             svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, sitsot_oi)
+            svm.set_list_by_entry(svm.OI_TYPE, outs_taps, abst_idx, 0, taps)
             svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, arg)
             svm.set_list_by_entry(svm.STFNI_TYPE, osis, abst_idx, 0, actual_arg)
         elif taps: # mitsot
-            mitsot_taps.append(taps)
             abst_meta = dict(name="out_%d_mitsot"%i, tag=svm.MITSOT_COMBO_TAG,
                 n_in=len(taps), scfn_rank=i)
             abst_idx = svm.add_var(abst_meta)
@@ -687,6 +686,7 @@ def scan(fn,
             mitsot_oi = scan_utils.expand_empty(init_out[:t0_idx],
                                         actual_n_steps)
             svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, mitsot_oi)
+            svm.set_list_by_entry(svm.OI_TYPE, outs_taps, abst_idx, 0, taps)
             init_out_var = tensor.as_tensor_variable(init_out)
             for tap_i, tap in enumerate(taps):
                 tap_t0_idx = t0_idx + tap
@@ -732,10 +732,9 @@ def scan(fn,
     # rules and outputs that needs to be seperated
     condition, outputs, updates = \
             scan_utils.get_updates_and_outputs(fn(*stfn_args))
-    if outputs_info is None:
-        # If outputs_info is omitted, but there are outputs, outputs
+    if len(outs_info) == 0:
+        # If outputs_info is omitted or empty, but there are outputs, outputs
         # must be nitsots, so we auto complete outputs_info(outs_info)
-        assert(len(outs_info) == 0)
         outs_info = [OrderedDict() for out in outputs]
         for scfn_rank in range(len(outs_info)):
             add_nitsot(scfn_rank)
@@ -766,7 +765,7 @@ def scan(fn,
                     if return_list is not True and len(outputs) == 1:
                         outputs = outputs[0]
         return (outputs, updates)
-    if condition:
+    if condition is not None:
         as_while = True
     else:
         as_while = False
@@ -815,6 +814,8 @@ def scan(fn,
                 not isinstance(arg, tensor.Constant))]
     dummy_args += extra_inputs
     dummy_outs = outputs
+    if condition is not None:
+        dummy_outs.append(condition)
     # Perform a try-except to provide a meaningful error message to the
     # user if inputs of the inner function are missing.
     try:
@@ -846,7 +847,6 @@ def scan(fn,
     n_dummy_outs = len(dummy_f.maker.outputs)
     if as_while:
         n_dummy_outs -= 1
-    n_dummy_outs -= len(update_outs)
     if n_dummy_outs != len(outs_info):
         # TODO rm debug
         if outputs_info is None:
@@ -856,11 +856,17 @@ def scan(fn,
                         'scan (i.e. it behaves like a map) ')
 
     # Step 5.3 Outputs that correspond to update rules of shared variables
-    n_ext_dys = 0
+    n_exp_ext_dys = 0
+    n_hid_ext_dys = 0
+    n_exp_dys = 0
+    n_hid_dys = 0
     # TODO
     givens = {}
     for input in dummy_f.maker.expanded_inputs:
         original_var = input.variable
+        explicit = original_var in non_seqs
+        if explicit:
+            scfn_rank = non_seqs.index(original_var)
         if isinstance(original_var, SharedVariable) and input.update:
             # dynamic shared variable
             new_var = safe_new(original_var)
@@ -871,8 +877,15 @@ def scan(fn,
             # it only contains TensorType
             if isinstance(new_var.type, ops.expandable_types):
                 # expandable dynamic shared(sitsot shared)
-                abst_meta = dict(name="ext_dynamic_shard_%d"%n_ext_dys,
-                                 tag=svm.SITSOT_SHARED_COMBO_TAG)
+                if explicit:
+                    abst_meta = dict(name="exp_ext_dynamic_shard_%d"%n_exp_ext_dys,
+                                     tag=svm.EXP_SITSOT_SHARED_COMBO_TAG,
+                                     scfn_rank=scfn_rank)
+                    n_exp_ext_dys += 1
+                else:
+                    abst_meta = dict(name="hid_ext_dynamic_shard_%d"%n_hid_ext_dys,
+                                    tag=svm.HID_SITSOT_SHARED_COMBO_TAG)
+                    n_hid_ext_dys += 1
                 abst_idx = svm.add_var(abst_meta)
                 svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, new_var)
                 expanded = scan_utils.expand_empty(
@@ -880,19 +893,30 @@ def scan(fn,
                         tensor.shape_padleft(original_var), 0),
                     actual_n_steps)
                 svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, expanded)
+                svm.set_list_by_entry(svm.OI_TYPE, outs_taps, abst_idx, 0, [-1])
                 update_var = tensor.as_tensor_variable(input.update)
                 svm.set_list_by_entry(svm.IO_TYPE, ios, abst_idx, 0, update_var)
                 svm.set_list_by_entry(svm.OO_TYPE, oos_ori_dyshared, abst_idx, 0, original_var)
                 givens[original_var] = new_var
             else:
                 # unexpandable dynamic shared
-                name="unexpandable_dynamic_shard_%d"%n_ext_dys
-                abst_meta = dict(name=name,
-                                 tag=svm.DYNAMIC_SHARED_COMBO_TAG)
+                # RandomStateType
+                if explicit:
+                    name = "exp_unexp_dynamic_shard_%d" % n_exp_dys
+                    abst_meta = dict(name=name,
+                                     tag=svm.EXP_DYSHARED_COMBO_TAG,
+                                     scfn_rank=scfn_rank)
+                    n_exp_dys += 1
+                else:
+                    name = "hid_unexp_dynamic_shard_%d" % n_hid_dys
+                    abst_meta = dict(name=name,
+                                     tag=svm.HID_DYSHARED_COMBO_TAG)
+                    n_hid_dys += 1
                 abst_idx = svm.add_var(abst_meta)
                 svm.set_list_by_entry(svm.II_TYPE, iis, abst_idx, 0, new_var)
                 svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, original_var)
                 svm.set_list_by_entry(svm.IO_TYPE, ios, abst_idx, 0, input.update)
+                svm.set_list_by_entry(svm.OO_TYPE, oos_ori_dyshared, abst_idx, 0, original_var)
                 givens[original_var] = new_var # givens[oi] = ii
 
 
@@ -927,7 +951,6 @@ def scan(fn,
 
     # handle explicit static shared vars
     static_shared_vars = [var_info.variable for var_info in static_shareds_info]
-    static_shared_vars = set(static_shared_vars)
     for scfn_rank, non_seq in enumerate(non_seqs):
         if non_seq in static_shared_vars:
             name = "nonseq_%d_static_shared" % scfn_rank
@@ -962,7 +985,7 @@ def scan(fn,
         abst_meta = dict(name="condition",
                          tag=svm.CONDITION_COMBO_TAG)
         abst_idx = svm.add_var(abst_meta)
-        svm.set_list_by_entry(svm.OI_TYPE, ois, abst_idx, 0, condition)
+        svm.set_list_by_entry(svm.IO_TYPE, ios, abst_idx, 0, condition)
 
     # gpuarray is imported here, instead of being imported on top of
     # the file because that would force on the user some dependencies that
@@ -990,7 +1013,8 @@ def scan(fn,
     new_ios = scan_utils.clone(ios, replace=new_givens)
 
     #* Create the Scan Op
-    tap_array = mitsot_taps + sitsot_taps
+    tap_array = [out_taps for out_taps in outs_taps
+            if out_taps is not None]
     if allow_gc is None:
         allow_gc = config.scan.allow_gc
     info = OrderedDict()
@@ -1002,8 +1026,10 @@ def scan(fn,
     info['n_mit_mot_outs'] = 0
     info['mit_mot_out_slices'] = []
     info['n_mit_sot'] = len(svm.select_by_tag(svm.SCFNI_OUTPUT_TYPE, svm.MITSOT_COMBO_TAG))
-    info['n_sit_sot'] = len(svm.select_by_tag(svm.II_TYPE, svm.SITSOT_COMBO_TAG))
-    info['n_shared_outs'] = len(svm.select_by_tag(svm.OI_TYPE, svm.DYNAMIC_SHARED_COMBO_TAG))
+    info['n_sit_sot'] = len(svm.select_by_tag(svm.II_TYPE, [svm.SITSOT_TAG]))
+    # TODO continue
+    # TODO check select_by_tag invokes
+    info['n_shared_outs'] = len(svm.select_by_tag(svm.OI_TYPE, svm.UNEXP_DYSHARED_FILTER))
     info['n_nit_sot'] = len(svm.select_by_tag(svm.OO_TYPE, svm.NITSOT_COMBO_TAG))
     info['truncate_gradient'] = truncate_gradient
     info['name'] = scf_name
@@ -1030,6 +1056,8 @@ def scan(fn,
             # way to make sure all inputs are tensors.
             pass
         new_ois.append(arg)
+    if debug_compare:
+        return iis, new_ios, info, new_ois
     oos = local_op(*new_ois)
     if type(oos) not in (list, tuple):
         oos = [oos]
@@ -1038,7 +1066,6 @@ def scan(fn,
     ##
     # Collect final scan outputs and update rules.
     ##
-
 
     # Remove initials of outputs.
     for i, (t0_idx, var) in enumerate(zip(oos_t0_idx, oos)):
@@ -1055,9 +1082,12 @@ def scan(fn,
     # extract dynamic shared updates
     update_map = OrderedUpdates()
     update_pairs = zip(oos_ori_dyshared, oos)
-    update_pairs = svm.select_by_tag(svm.OO_TYPE, svm.SITSOT_SHARED_COMBO_TAG, update_pairs)
-    for ori_shared, out_seq in update_pairs:
+    sitsot_update_pairs = svm.select_by_tag(svm.OO_TYPE, svm.SITSOT_SHARED_FILTER, update_pairs)
+    for ori_shared, out_seq in sitsot_update_pairs:
         update_map[ori_shared] = out_seq[-1]
+    unexp_update_pairs = svm.select_by_tag(svm.OO_TYPE, svm.UNEXP_DYSHARED_FILTER, update_pairs)
+    for ori_shared, updated in unexp_update_pairs:
+        update_map[ori_shared] = updated
 
     if debug_compare:
         return iis, new_ios, info, scan_outs, update_map

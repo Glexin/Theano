@@ -5633,18 +5633,15 @@ class TestInconsistentBroadcast(unittest.TestCase):
         gs = tensor.grad(y.sum(), x)
 
 
-class TestMissingInputError(unittest.TestCase):
+def test_update_hidden_inputs():
+    c = theano.shared(0.)
+    inc = tensor.scalar('inc')
 
-    @raises(theano.gof.fg.MissingInputError)
-    def test_raise_error(self):
-        c = theano.shared(0.)
-        inc = tensor.scalar('inc')
+    def count_up():
+        return tensor.zeros(()), {c: c + inc}
 
-        def count_up():
-            return tensor.zeros(()), {c: c + inc}
-
-        _, updates = theano.scan(count_up, n_steps=20)
-        func = theano.function(inputs=[inc], outputs=[], updates=updates)
+    _, updates = theano.scan(count_up, n_steps=20)
+    func = theano.function(inputs=[inc], outputs=[], updates=updates)
 
 
 class TestGradUntil(unittest.TestCase):

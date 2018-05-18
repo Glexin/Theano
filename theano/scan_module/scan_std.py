@@ -46,6 +46,7 @@ __contact__ = "Razvan Pascanu <r.pascanu@gmail>"
 
 import logging
 import numpy as np
+import theano
 import warnings
 from collections import OrderedDict
 
@@ -352,22 +353,22 @@ def scan(fn,
         are validated to be consistent.
 
     """
-    '''
-    scan2_outs = scan2.scan(fn,
-            sequences,
-            outputs_info,
-            non_sequences,
-            n_steps,
-            truncate_gradient,
-            go_backwards,
-            mode,
-            name,
-            profile,
-            allow_gc,
-            strict,
-            return_list,
-            True)
-            '''
+    compare = True
+    if compare:
+        scan2_outs = scan2.scan(fn,
+                sequences,
+                outputs_info,
+                non_sequences,
+                n_steps,
+                truncate_gradient,
+                go_backwards,
+                mode,
+                name,
+                profile,
+                allow_gc,
+                strict,
+                return_list,
+                True)
     # General observation : this code is executed only once, at creation
     # of the computational graph, so we don't yet need to be smart about
     # anything (to speed things up)
@@ -1073,6 +1074,8 @@ def scan(fn,
     ##
     # Step 8. Compute the outputs using the scan op
     ##
+    print("scan_seqs")
+    print(scan_seqs)
     _scan_inputs = (scan_seqs +
                     mit_mot_scan_inputs +
                     mit_sot_scan_inputs +
@@ -1167,33 +1170,51 @@ def scan(fn,
     elif len(scan_out_list) == 0:
         scan_out_list = None
 
-    '''
-    new_inner_inputs, new_new_outs, new_info, new_scan_outs, new_ups = scan2_outs
-    import theano
-    from theano import pp
-    def _p(vars):
-        for i, var in enumerate(vars):
-            print("%d %s" % (i, pp(var)))
+    if compare:
+        #new_inner_inputs, new_new_outs, new_info, new_sol, new_ups = scan2_outs
+        new_inner_inputs, new_new_outs, new_info, new_scan_inputs = scan2_outs
+        from theano import pp
+        def _p(vars):
+            for i, var in enumerate(vars):
+                print("%d %s" % (i, pp(var)))
 
-    def _p2(vars):
-        for i, var in enumerate(vars):
-            print("%d %s" % (i, theano.printing.debugprint(var)))
+        def _p2(vars):
+            for i, var in enumerate(vars):
+                print("%d %s" % (i, theano.printing.debugprint(var)))
 
-    for key in info.keys():
-        print(key, "----")
-        print(info[key])
-        print(new_info[key])
-    print("inner inputs----")
-    _p(inner_inputs)
-    _p(new_inner_inputs)
-    print("new_outs----")
-    _p2(new_outs)
-    _p2(new_new_outs)
-    print("scan_out_list")
-    _p(scan_out_list)
-    _p(new_scan_outs)
-    print("updates_map")
-    print(update_map)
-    print(new_ups)
-    '''
+        def _cp(old_vars, new_vars, graph):
+            if not isinstance(old_vars, list):
+                assert not isinstance(new_vars, list)
+                old_vars = [old_vars]
+                new_vars = [new_vars]
+            for i, (old_var, new_var) in enumerate(zip(old_vars, new_vars)):
+                if graph:
+                    print("---%d----old" % i)
+                    print(theano.printing.debugprint(old_var))
+                    print("---%d----new" % i)
+                    print(theano.printing.debugprint(new_var))
+                else:
+                    print("---%d----old" % i)
+                    print(pp(old_var))
+                    print("---%d----new" % i)
+                    print(pp(new_var))
+
+        for key in info.keys():
+            print(key, "----")
+            print(info[key])
+            print(new_info[key])
+        print("inner inputs----")
+        _p(inner_inputs)
+        _p(new_inner_inputs)
+        print("scan_inputs----")
+        _cp(scan_inputs, new_scan_inputs, True)
+        print("new_outs----")
+        _cp(new_outs, new_new_outs, True)
+        '''
+        print("scan_out_list")
+        _cp(scan_out_list, new_sol, True)
+        print("updates_map")
+        print(update_map)
+        print(new_ups)
+        '''
     return (scan_out_list, update_map)
